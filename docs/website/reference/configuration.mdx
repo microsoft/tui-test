@@ -1,0 +1,275 @@
+---
+title: Configuration reference
+description: Configuration file fields, environment variables, and option precedence.
+editUrl: false
+sidebar:
+  order: 2
+---
+
+## File discovery
+
+The CLI uses `--config PATH` first, then `TUI_TEST_CONFIG`.
+Without an explicit file it selects the first `tui-test.toml` found in:
+
+1. The invocation directory.
+2. The platform config directory under `tui-test`.
+3. `~/.tui-test`, or the directory selected by `TUI_TEST_HOME`.
+
+Setting `TUI_TEST_HOME` skips the platform-config-directory candidate.
+An explicitly selected file must exist. Without a discovered file, the CLI
+uses built-in defaults. Unknown configuration fields are rejected.
+
+## Profiles
+
+```toml
+[profiles.default]
+scrollback = 10000
+
+[profiles.ci]
+scrollback = 500
+
+[profiles.ci.timeouts]
+text = 10000
+command = 60000
+```
+
+`--profile NAME` selects a profile; the default is `default`.
+A named profile must exist. A config file may omit the `default` profile and
+use built-in profile values.
+Profile fields are `scrollback`, `colors`, `timeouts`, and `recording`.
+
+## Shell and backend settings
+
+Shell, backend, dimensions, working directory, and environment are launch
+options rather than TOML profile fields.
+Use `--shell`, `--backend`, `--cols`, `--rows`, `--cwd`, and repeatable `--env`
+at the CLI, or the corresponding library options.
+The default backend is Alacritty and the grid is 80 by 30.
+
+## Timeouts
+
+Profile timeout fields and CLI timeout flags use milliseconds:
+
+| Class | Default | Launch flag |
+| --- | --- | --- |
+| `text` | 5000 | `--timeout-text MS` |
+| `idle` | 5000 | `--timeout-idle MS` |
+| `command` | 30000 | `--timeout-command MS` |
+| `exit` | 30000 | `--timeout-exit MS` |
+| `ready` | 30000 | `--timeout-ready MS` |
+
+Per-launch values override profile timeouts. Per-operation timeouts override
+the session value. Environment defaults apply when a class has no explicit
+session value.
+
+## Scrollback
+
+`scrollback` is the number of rows retained beyond the visible screen.
+The default is 10000. It is separate from diagnostic screen-history retention.
+
+## Terminal colors
+
+```toml
+[profiles.default.colors]
+background = "#000000"
+foreground = "#c0c0c0"
+red = "#800000"
+```
+
+The palette sets terminal colors. Application color changes are reported
+separately by `get colors` and `state.colors`.
+Canvas and title-bar colors belong to recording style.
+See the [color fields](https://github.com/microsoft/tui-test/blob/main/crates/tui-test/src/profile.rs)
+for the complete palette.
+
+## Recording directories
+
+```toml
+[recording]
+directory = "./casts"
+```
+
+`directory` selects the automatic cast directory. It is optional and independent
+of `trace.directory`. The configuration does not accept `recording.mode`;
+retention follows trace mode.
+
+## Recording style
+
+`[recording.style]` controls screenshots and raster recordings, including failure
+SVGs and HTML-report SVGs. Every style field is optional.
+The complete Rust types are in
+[`render/style.rs`](https://github.com/microsoft/tui-test/blob/main/crates/tui-test/src/render/style.rs).
+
+### Fonts and zoom
+
+Defaults include `font_size = 17` and `title_font_size = 13`.
+Cell dimensions follow the terminal font size.
+The default font stack is
+`'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,'DejaVu Sans Mono',monospace`.
+
+```toml
+[recording.style.font]
+family = "Berkeley Mono, monospace"
+bold = "JetBrains Mono ExtraBold"
+files = ["fonts/BerkeleyMono.ttf"]
+```
+
+`bold`, `italic`, and `bold_italic` fall back to `family` when unset.
+Raster output tries the font stack from left to right and can load additional
+font files. Missing families or files fall back.
+Custom font data is limited to 64 MiB in total.
+
+Use monospace fonts.
+SVG screenshots name the family but use fonts installed on the viewing machine.
+Capture commands also accept `--zoom`.
+
+### Canvas and content padding
+
+`canvas_padding` is the gap around the window, default 24 on each side.
+`content_padding` is the gap inside it, default 8 at the top, 15 on the sides,
+and 14 at the bottom. Each accepts one number or a table with individual sides.
+Omitted sides keep their defaults or inherited values.
+
+```toml
+[recording.style]
+canvas_background = "#6867aa"
+canvas_padding = 24
+
+[recording.style.content_padding]
+top = 16
+left = 24
+```
+
+Zero removes the corresponding gap.
+For a grid without a title bar, a uniform content padding insets all four sides.
+
+### Window, border, and shadow
+
+These are the defaults:
+
+```toml
+[recording.style.window]
+title_bar = true
+traffic_lights = true
+background = "#d9d9e8"
+foreground = "#414145"
+divider = "#000000"
+
+[recording.style.border]
+width = 0
+color = "#000000"
+radius = 8
+
+[recording.style.shadow]
+enabled = true
+color = "#080812"
+offset = 5
+spread = 7
+```
+
+Set `title_bar = false` for a grid without window chrome.
+A zero border width hides the border while retaining the configured corner radius.
+
+### Backgrounds and transparency
+
+The canvas, title bar, and terminal have separate backgrounds.
+`canvas_background` controls the outermost layer.
+Capture options `--background COLOR` and `--transparent` are mutually exclusive.
+They require an output path for screenshots, are unsupported for cast recordings,
+and cannot make MP4 transparent.
+
+### Cursor animation
+
+```toml
+[recording.style.cursor]
+blink = true
+blink_interval_ms = 500
+```
+
+Blinking requires both this permission and an application cursor style that
+requests it. The interval must be a positive integer and sets each visible or
+hidden phase before playback speed scaling. Low FPS can miss short phases.
+
+Animation starts visible and resets when a sample detects a change in cursor
+position, style, or visibility. Hidden and off-screen cursors remain hidden.
+Screenshots use the visible phase of an otherwise-visible cursor.
+These settings do not change cursor inspection, waits, or asciicast output.
+
+## Trace modes and directories
+
+```toml
+[trace]
+mode = "on-failure"
+directory = "./traces"
+```
+
+Modes are `off` (default), `on-failure`, and `on`.
+The default directory is `.tui-test/traces`.
+Set trace options before starting a session.
+See [trace viewer](/docs/tools/trace-viewer/) for retained files.
+
+## Diagnostics and screen history
+
+```toml
+[diagnostics]
+screen-history-limit = 10
+```
+
+This keeps recent distinct screens for failures. The CLI launch flag
+`--screen-history-limit` overrides it.
+It does not set scrollback retention.
+
+## Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `TUI_TEST_SESSION` | Default session name. |
+| `TUI_TEST_CONFIG` | Explicit config path, unless `--config` is supplied. |
+| `TUI_TEST_HOME` | Runtime-data root and fallback config directory. |
+| `TUI_TEST_NATIVE_LIBRARY` | Explicit native library for Go, Python, or JavaScript. |
+| `TUI_TEST_TIMEOUT_TEXT_MS` | Default text timeout. |
+| `TUI_TEST_TIMEOUT_IDLE_MS` | Default idle timeout. |
+| `TUI_TEST_TIMEOUT_COMMAND_MS` | Default command timeout. |
+| `TUI_TEST_TIMEOUT_EXIT_MS` | Default exit timeout. |
+| `TUI_TEST_TIMEOUT_READY_MS` | Default readiness timeout. |
+
+Timeout environment values must be positive integer milliseconds.
+Invalid values fall back to the built-in default.
+An explicit native library must match the package's platform and source revision.
+
+## Defaults, inheritance, and CLI overrides
+
+Profile recording settings inherit file-level recording values key by key,
+including nested style fields:
+
+```toml
+[recording]
+directory = "./artifacts"
+
+[recording.style]
+font_size = 17
+canvas_background = "#101014"
+canvas_padding = 30
+content_padding = 20
+
+[profiles.docs.recording.style]
+font_size = 24
+
+[profiles.docs.recording.style.canvas_padding]
+bottom = 48
+```
+
+The `docs` profile keeps the file's directory, canvas color, content padding,
+and 30px canvas padding on the other three sides.
+Its font size is 24 and its bottom canvas padding is 48.
+
+Client-side configuration is resolved before launch.
+Changing the file does not replace an already live session; use a restart
+when applying new launch settings.
+
+## Relative path resolution
+
+Recording directories, trace directories, and custom font paths in a config
+file resolve beside that file. They do not change with the daemon's working
+directory.
+Tape paths instead use the invocation directory; see [tapes](/docs/tools/tapes/).

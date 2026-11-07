@@ -1,0 +1,333 @@
+---
+title: Screenshots
+description: Capture terminal text, SVG, and PNG output.
+editUrl: false
+sidebar:
+  order: 1
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Text captures
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.screenshot());
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.screenshot())
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    println!(
+        "{:?}",
+        terminal.execute(Operation::Screenshot {
+            full: false,
+            path: None,
+            zoom: None,
+            background: None
+        })?
+    );
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.Screenshot("", tuitest.ScreenshotOptions{})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test screenshot
+    ```
+  </TabItem>
+</Tabs>
+
+Without an output path, `screenshot` returns terminal text.
+Use `text` when you only need a text read.
+
+## SVG screenshots
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.screenshot("result.svg"));
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.screenshot("result.svg"))
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    println!(
+        "{:?}",
+        terminal.execute(Operation::Screenshot {
+            full: false,
+            path: Some("result.svg".into()),
+            zoom: None,
+            background: None
+        })?
+    );
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.Screenshot("result.svg", tuitest.ScreenshotOptions{})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test screenshot -o result.svg
+    ```
+  </TabItem>
+</Tabs>
+
+SVG captures preserve terminal styling and name the configured fonts.
+They render with fonts installed on the machine that opens the file.
+
+## PNG screenshots
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.screenshot("result.png"));
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.screenshot("result.png"))
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    println!(
+        "{:?}",
+        terminal.execute(Operation::Screenshot {
+            full: false,
+            path: Some("result.png".into()),
+            zoom: None,
+            background: None
+        })?
+    );
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.Screenshot("result.png", tuitest.ScreenshotOptions{})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test screenshot result.png
+    ```
+  </TabItem>
+</Tabs>
+
+The extension selects PNG or SVG.
+Rust callers need the raster feature and suitable fonts for PNG output.
+The [native language packages](/docs/install/#libraries) include their engine.
+
+## Visible viewport and scrollback
+
+Captures use the selected native history viewport.
+Add `--full` to include retained scrollback.
+Cursor state keeps application coordinates, but captures project the cursor
+into the view and hide it outside the viewport.
+
+## Highlight locator matches
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.getByText("Ready").highlight();
+    console.log(await terminal.screenshot("highlighted.svg"));
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.get_by_text("Ready").highlight()
+    print(await terminal.screenshot("highlighted.svg"))
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.get_by_text("Ready").highlight()?;
+    println!(
+        "{:?}",
+        terminal.execute(Operation::Screenshot {
+            full: false,
+            path: Some("highlighted.svg".into()),
+            zoom: None,
+            background: None
+        })?
+    );
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Highlight(tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    {
+        value, err := terminal.Screenshot("highlighted.svg", tuitest.ScreenshotOptions{})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test highlight text "Ready"
+    tui-test screenshot -o highlighted.svg
+    ```
+  </TabItem>
+</Tabs>
+
+Highlights also appear in the [live monitor](/docs/tools/monitor/).
+Use text selection or style constraints to mark the same match your test uses.
+
+## Zoom and fonts
+
+`--zoom N` changes the capture scale.
+Configure font families, sizes, and additional font files in
+`[recording.style]`. Use monospace fonts; glyphs are fitted into fixed-width
+terminal cells.
+
+Raster output uses installed or loaded fonts. Unavailable fonts fall back.
+SVG names a font family but does not embed custom font files.
+
+## Canvas backgrounds and transparency
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.screenshot("result.png", { background: "#101014" }));
+    console.log(await terminal.screenshot("result.svg", { transparent: true }));
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.screenshot("result.png", background="#101014"))
+    print(await terminal.screenshot("result.svg", transparent=True))
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{CaptureBackground, Operation};
+
+    println!(
+        "{:?}",
+        terminal.execute(Operation::Screenshot {
+            full: false,
+            path: Some("result.png".into()),
+            zoom: None,
+            background: Some(CaptureBackground::parse("#101014")?)
+        })?
+    );
+    println!(
+        "{:?}",
+        terminal.execute(Operation::Screenshot {
+            full: false,
+            path: Some("result.svg".into()),
+            zoom: None,
+            background: Some(CaptureBackground::Transparent)
+        })?
+    );
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.Screenshot("result.png", tuitest.ScreenshotOptions{Background: "#101014"})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    {
+        value, err := terminal.Screenshot("result.svg", tuitest.ScreenshotOptions{Transparent: true})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test screenshot -o result.png --background '#101014'
+    tui-test screenshot -o result.svg --transparent
+    ```
+  </TabItem>
+</Tabs>
+
+Background and transparency are mutually exclusive and require an output path.
+They control the outer canvas, separately from terminal-cell and window colors.
+
+## Window styling and profile overrides
+
+`[recording.style]` controls the title bar, canvas and content padding, border,
+shadow, and fonts. Profiles inherit omitted keys.
+Failure SVGs and the SVGs embedded in HTML reports use the session style.
+
+See the [configuration guide](/docs/guides/configuration/#configure-capture-styles)
+for a dark theme and the
+[style reference](/docs/reference/configuration/#recording-style) for defaults.

@@ -1,0 +1,245 @@
+---
+title: Scrollback and history
+description: Inspect older output and control the terminal history viewport.
+editUrl: false
+sidebar:
+  order: 7
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Live screen and history viewport
+
+The native history viewport shows older terminal rows without sending input to
+the application. `get viewport --json` returns `offset` and `history` in rows.
+An offset of zero means the live screen.
+
+## Read full terminal text
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.text({ full: false }));
+    console.log(await terminal.text({ full: true }));
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.text(full=False))
+    print(await terminal.text(full=True))
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    println!("{:?}", terminal.execute(Operation::Text { full: false })?);
+    println!("{:?}", terminal.execute(Operation::Text { full: true })?);
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.Text(tuitest.TextOptions{Full: false})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    {
+        value, err := terminal.Text(tuitest.TextOptions{Full: true})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test text
+    tui-test text --full
+    ```
+  </TabItem>
+</Tabs>
+
+The first command reads the selected viewport. The second returns retained
+history plus the live screen, regardless of the viewport.
+
+## Scroll through native history
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.scroll(5);
+    console.log(await terminal.getViewport());
+    console.log(await terminal.text({ full: false }));
+    await terminal.scroll(-2);
+    await terminal.scrollToTop();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.scroll(5)
+    print(await terminal.get_viewport())
+    print(await terminal.text(full=False))
+    await terminal.scroll(-2)
+    await terminal.scroll_to_top()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{Operation, ScrollTarget};
+
+    terminal.execute(Operation::Scroll {
+        target: ScrollTarget::Lines(5),
+    })?;
+    println!("{:?}", terminal.execute(Operation::GetViewport)?);
+    println!("{:?}", terminal.execute(Operation::Text { full: false })?);
+    terminal.execute(Operation::Scroll {
+        target: ScrollTarget::Lines(-2),
+    })?;
+    terminal.execute(Operation::Scroll {
+        target: ScrollTarget::Top,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Scroll(5); err != nil {
+        t.Fatal(err)
+    }
+    {
+        value, err := terminal.GetViewport()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    {
+        value, err := terminal.Text(tuitest.TextOptions{Full: false})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    if err := terminal.Scroll(-2); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.ScrollToTop(); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test scroll up 5
+    tui-test get viewport --json
+    tui-test text
+    tui-test scroll down 2
+    tui-test scroll top
+    ```
+  </TabItem>
+</Tabs>
+
+The default CLI scroll amount is one row. Amounts range from zero through
+2147483647. Movement stops at history boundaries.
+
+Library `scroll(lines)` methods accept signed 32-bit counts: positive values
+show older output, negative values move toward the live screen, and zero leaves
+the viewport unchanged. Go uses `int32`.
+
+Python returns a `Viewport` dictionary with integer `offset` and `history`.
+JavaScript returns numeric fields and rejects counts outside its safe integer
+range. Go preserves full-width `uint64` row counts.
+
+## Return to the live screen
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.scrollToBottom();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.scroll_to_bottom()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{Operation, ScrollTarget};
+
+    terminal.execute(Operation::Scroll {
+        target: ScrollTarget::Bottom,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.ScrollToBottom(); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test scroll bottom
+    ```
+  </TabItem>
+</Tabs>
+
+In the libraries use `scrollToBottom()`, `scroll_to_bottom()`, or
+`ScrollToBottom()`. Corresponding top methods show the oldest retained output.
+
+## Input while viewing history
+
+New output preserves the historical view until retained history expires.
+Keyboard input returns to the live screen. Mouse input and historical locator
+clicks fail while the viewport shows history; return to the bottom first.
+
+## Cursor coordinates and captures
+
+Visible text, locators, screenshots, and the monitor follow the viewport.
+Full-text reads remain independent. Cursor getters keep application
+coordinates; captures project the cursor into the viewport and hide it outside
+the view.
+
+Raster recordings capture viewport changes. Asciicast is a timestamped PTY
+stream and does not record native viewport movements.
+
+## History retention
+
+Set `scrollback` in the session profile to control how many rows remain beyond
+the live screen. This is separate from `screen-history-limit`, which retains
+recent distinct screens for failure diagnostics.
+
+```toml
+[profiles.default]
+scrollback = 10000
+```
+
+## Native scrolling and application mouse scrolling
+
+`scroll` changes tui-test's viewport; `mouse scroll` sends wheel input to the
+application. Choose the one that matches what you want to test.
+
+The [JavaScript example](https://github.com/microsoft/tui-test/blob/main/bindings/js/examples/scrollback.mjs)
+prints live text, history, and unchanged full text. After a source build, run
+`node examples/scrollback.mjs` from `bindings/js`.
+There is also a [Rust example](https://github.com/microsoft/tui-test/blob/main/crates/tui-test/examples/scrollback.rs).

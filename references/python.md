@@ -133,4 +133,4 @@ Helpers: `create_terminal`, `terminal`, `close_all_tracked`, `set_terminal_defau
 
 `ExpectationError`, `UsageError`, `NoSessionError`, and `InternalError` extend `TuiTestError`.
 
-Full API: [bindings/python/README.md](https://github.com/microsoft/tui-test/blob/main/bindings/python/README.md)
+Full API: [Python](https://tui-test.dev/docs/api/python/)

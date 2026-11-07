@@ -1,0 +1,455 @@
+---
+title: Examples
+description: Examples of shell automation and terminal app testing.
+editUrl: false
+sidebar:
+  order: 12
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Run a shell command
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.open();
+    await terminal.submit("echo hello");
+    await terminal.waitCommand();
+    await terminal.expectOutput("hello");
+    await terminal.expectExitCode(0);
+    await terminal.close();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.open()
+    await terminal.submit("echo hello")
+    await terminal.wait_command()
+    await terminal.expect_output("hello")
+    await terminal.expect_exit_code(0)
+    await terminal.close()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{OpenOptions, Operation};
+
+    terminal.open(OpenOptions {
+        ..Default::default()
+    })?;
+    terminal.execute(Operation::Submit {
+        data: Some("echo hello".into()),
+    })?;
+    terminal.execute(Operation::WaitCommand { timeout_ms: None })?;
+    terminal.execute(Operation::ExpectOutput {
+        text: "hello".into(),
+        regex: false,
+    })?;
+    terminal.execute(Operation::ExpectExitCode {
+        code: 0,
+        timeout_ms: None,
+    })?;
+    terminal.close()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if _, err := terminal.Open(tuitest.OpenOptions{SpawnOptions: tuitest.SpawnOptions{}}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Submit(tuitest.Ptr("echo hello")); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.WaitCommand(tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.ExpectOutput("hello", tuitest.OutputOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.ExpectExitCode(0, tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Close(); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test --session example open
+    tui-test --session example submit "echo hello"
+    tui-test --session example wait command
+    tui-test --session example expect output "hello"
+    tui-test --session example expect exit-code 0
+    tui-test --session example close
+    ```
+  </TabItem>
+</Tabs>
+
+## Drive a terminal app
+
+Replace `my-app` with your executable and the labels with text it renders.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.run("my-app", [], { backend: "alacritty" });
+    await terminal.getByText("Ready").expect();
+    await terminal.getByText("Continue").click({ button: "left", clicks: 1 });
+    await terminal.getByText("Done").expect();
+    console.log(await terminal.screenshot("result.svg"));
+    await terminal.close();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.run("my-app", backend="alacritty")
+    await terminal.get_by_text("Ready").expect()
+    await terminal.get_by_text("Continue").click(button="left", clicks=1)
+    await terminal.get_by_text("Done").expect()
+    print(await terminal.screenshot("result.svg"))
+    await terminal.close()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{LocatorClickOptions, MouseButton, MouseOptions, Operation, RunOptions};
+
+    terminal.run(RunOptions {
+        program: "my-app".into(),
+        args: vec![],
+        backend: tui_test::terminal::backend::Backend::Alacritty,
+        profile: Default::default(),
+        cols: 80,
+        rows: 30,
+        cwd: None,
+        env: vec![],
+        wait_ready: None,
+        restart: false,
+        timeouts: Default::default(),
+        recording: Default::default(),
+        style: Default::default(),
+    })?;
+    terminal.get_by_text("Ready").expect()?;
+    terminal
+        .get_by_text("Continue")
+        .click_with(LocatorClickOptions {
+            mouse: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+            clicks: 1,
+            ..Default::default()
+        })?;
+    terminal.get_by_text("Done").expect()?;
+    println!(
+        "{:?}",
+        terminal.execute(Operation::Screenshot {
+            full: false,
+            path: Some("result.svg".into()),
+            zoom: None,
+            background: None
+        })?
+    );
+    terminal.close()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if _, err := terminal.Run("my-app", nil, tuitest.SpawnOptions{Backend: tuitest.Alacritty}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Continue", tuitest.TextSelectorOptions{}).Click(tuitest.LocatorClickOptions{MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left}, Clicks: tuitest.Ptr(uint32(1))}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Done", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    {
+        value, err := terminal.Screenshot("result.svg", tuitest.ScreenshotOptions{})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    if err := terminal.Close(); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test run my-app
+    tui-test expect text "Ready"
+    tui-test click text "Continue"
+    tui-test expect text "Done"
+    tui-test screenshot -o result.svg
+    tui-test close
+    ```
+  </TabItem>
+</Tabs>
+
+In scripts, put `close` in cleanup handling so it runs after a failed assertion.
+The [language test helpers](/docs/getting-started/writing-tests/) handle cleanup.
+
+## Match relative text
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal
+      .getByText("Settings")
+      .getByText("Save", { direction: "after" })
+      .unique()
+      .click({ button: "left", clicks: 1 });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.get_by_text("Settings").get_by_text("Save", direction="after").unique().click(button="left", clicks=1)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{LocatorClickOptions, LocatorDirection, MouseButton, MouseOptions};
+
+    terminal
+        .get_by_text("Settings")
+        .get_by_text_relative("Save", LocatorDirection::After)
+        .unique()
+        .click_with(LocatorClickOptions {
+            mouse: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+            clicks: 1,
+            ..Default::default()
+        })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Settings", tuitest.TextSelectorOptions{}).GetByText("Save", tuitest.TextSelectorOptions{Direction: tuitest.After}).Unique().Click(tuitest.LocatorClickOptions{MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left}, Clicks: tuitest.Ptr(uint32(1))}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test click text "Save" --after-text "Settings" --match unique
+    ```
+  </TabItem>
+</Tabs>
+
+The [locator guide](/docs/guides/locators/) also covers matching styles,
+hyperlinks, and composed queries.
+
+## Wait for loading to finish
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.getByText("Loading").expect({ not: true, timeout: 10000 });
+    await terminal.getByText("Ready").expect();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.get_by_text("Loading").expect(not_=True, timeout=10000)
+    await terminal.get_by_text("Ready").expect()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::LocatorExpectOptions;
+
+    terminal
+        .get_by_text("Loading")
+        .expect_with(LocatorExpectOptions {
+            not: true,
+            timeout_ms: Some(10000),
+            ..Default::default()
+        })?;
+    terminal.get_by_text("Ready").expect()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Loading", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{Not: true, Timeout: tuitest.Ptr(10000 * time.Millisecond)}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test expect text "Loading" --not --timeout 10000
+    tui-test expect text "Ready"
+    ```
+  </TabItem>
+</Tabs>
+
+## Click with modifiers
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.mouse.click(10, 5, { button: "right", ctrl: true });
+    await terminal
+      .getByText("Item")
+      .click({ button: "left", clicks: 2, shift: true });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.mouse.click(10, 5, button="right", ctrl=True)
+    await terminal.get_by_text("Item").click(button="left", clicks=2, shift=True)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{LocatorClickOptions, MouseAction, MouseButton, MouseOptions, Operation};
+
+    terminal.execute(Operation::Mouse {
+        action: MouseAction::Click {
+            x: Some(10),
+            y: Some(5),
+            on_text: None,
+            options: MouseOptions {
+                button: MouseButton::Right,
+                ctrl: true,
+                ..Default::default()
+            },
+            clicks: 1,
+        },
+    })?;
+    terminal
+        .get_by_text("Item")
+        .click_with(LocatorClickOptions {
+            mouse: MouseOptions {
+                button: MouseButton::Left,
+                shift: true,
+                ..Default::default()
+            },
+            clicks: 2,
+            ..Default::default()
+        })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Mouse.Click(tuitest.MouseClickOptions{X: tuitest.Ptr(uint16(10)), Y: tuitest.Ptr(uint16(5)), MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Right, Ctrl: true}}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Item", tuitest.TextSelectorOptions{}).Click(tuitest.LocatorClickOptions{MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left, Shift: true}, Clicks: tuitest.Ptr(uint32(2))}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test mouse click 10 5 --button right --ctrl
+    tui-test click text "Item" --shift --clicks 2
+    ```
+  </TabItem>
+</Tabs>
+
+## Wait for clipboard content
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.waitClipboard("copied text", { timeout: 5000 });
+    console.log(await terminal.getClipboard());
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.wait_clipboard("copied text", timeout=5000)
+    print(await terminal.get_clipboard())
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.execute(Operation::wait_clipboard_match("copied text", Some(5000)))?;
+    println!("{:?}", terminal.execute(Operation::GetClipboard)?);
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.WaitClipboard(tuitest.ClipboardWaitOptions{Text: tuitest.Ptr("copied text"), Timeout: tuitest.Ptr(5000 * time.Millisecond)}); err != nil {
+        t.Fatal(err)
+    }
+    {
+        value, err := terminal.GetClipboard()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test wait clipboard "copied text" --timeout 5000
+    tui-test get clipboard
+    ```
+  </TabItem>
+</Tabs>
+
+Omit the pattern to wait for the next clipboard change.
+
+## Save failure artifacts
+
+```sh
+tui-test --json --failure-artifacts ./artifacts/failures --diagnostic-context test=settings-save expect text "Save" --fg green --timeout 5000
+```
+
+See [recordings](/docs/tools/recordings/) for animations,
+[tapes](/docs/tools/tapes/) for scripted GIFs, and the source examples:
+
+| Example | Source |
+| --- | --- |
+| JavaScript native history | [scrollback.mjs](https://github.com/microsoft/tui-test/blob/main/bindings/js/examples/scrollback.mjs) |
+| Python native library | [shared_library.py](https://github.com/microsoft/tui-test/blob/main/bindings/python/examples/shared_library.py) |
+| Go packaged engine | [smoke/main.go](https://github.com/microsoft/tui-test/blob/main/bindings/go/examples/smoke/main.go) |
+| Rust native history | [scrollback.rs](https://github.com/microsoft/tui-test/blob/main/crates/tui-test/examples/scrollback.rs) |
+| Rust time-based recording | [time_based_recording.rs](https://github.com/microsoft/tui-test/blob/main/crates/tui-test/examples/time_based_recording.rs) |

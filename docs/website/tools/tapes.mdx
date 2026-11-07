@@ -1,0 +1,89 @@
+---
+title: Tape recordings
+description: Validate a trusted VHS-style tape and run it to export a GIF.
+editUrl: false
+sidebar:
+  order: 7
+---
+
+The CLI and Rust `tui_test::tape` module parse and run a limited VHS dialect.
+The runner exports one GIF from an isolated local shell session.
+There is no tape API in the language bindings.
+
+## Write a tape
+
+Save this as `demo.tape`:
+
+```text
+Output demo.gif
+Set Columns 40
+Set Rows 6
+Set Padding 12
+Set FontSize 18
+Set CursorBlink false
+Hide
+Type@0 'echo Hello from a tape'
+Show
+Enter@200ms
+Sleep 1
+Hide
+```
+
+Run only trusted tapes. They can execute shell commands and are not sandboxed.
+`check` validates syntax and execution requirements, not safety.
+
+## Check and run
+
+```sh
+tui-test tape check demo.tape --json
+tui-test tape run demo.tape
+```
+
+`check` loads sources, compiles the complete tape, and checks execution
+requirements without starting a child or writing output.
+`run` repeats those checks, exports the GIF, and closes its session after
+success or failure.
+
+The default shell is bash on Unix or PowerShell on Windows.
+The example writes `demo.gif` with a 40-column, 6-row terminal and about
+1.2 seconds of visible time.
+Results include the terminal grid, actual pixel dimensions, and source-located
+warnings.
+
+From the repository root, the checked-in example is:
+
+```sh
+tui-test tape check crates/tui-test/tests/fixtures/tape/run.tape --json
+tui-test tape run crates/tui-test/tests/fixtures/tape/run.tape
+```
+
+It writes `tape-example.gif` in that directory.
+
+## Paths and session behavior
+
+Root tape, `Source`, `Require`, and output paths resolve from the invocation
+directory, not the containing tape's directory.
+Tape commands do not use daemon sessions, project configuration, or
+`TUI_TEST_SESSION` for session selection.
+The child still inherits the process environment.
+
+EOF closes the shell even if a submitted command is still running.
+Tape delays do not wait for command completion.
+Use ordinary sessions when you need state-based waits and CLI failure bundles.
+
+Only the global `--json` output flag applies. Explicit session, verbose,
+failure-artifact, or diagnostic-context flags are rejected.
+Syntax, unsupported features, and preflight failures return exit code `2`.
+Execution failures use the core error's exit code.
+
+## Rust API and supported syntax
+
+Rust exposes `parse`, `load`, `compile`, `check`, and `run`.
+Parser and compiler use does not require raster support; `check` and `run`
+require `recording-raster`.
+The `recording-font-jetbrains-mono` feature also bundles the default font.
+
+The [complete tape reference](https://github.com/microsoft/tui-test/blob/main/references/tape.md)
+documents supported commands, unsupported VHS features, source handling, result
+fields, and errors. The supported dialect follows VHS v0.12.1 without promising
+full compatibility or identical pixels.

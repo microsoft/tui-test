@@ -2,9 +2,14 @@
 title: Install tui-test
 description: Install the tui-test CLI or use the terminal engine from Python, JavaScript, Rust, or Go.
 editUrl: false
+sidebar:
+  order: 2
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`tui-test` runs on Windows, Linux, and macOS. Install the CLI for terminal
+automation, or a library to use the engine from your code.
 
 ## CLI
 
@@ -44,13 +49,16 @@ If your shell cannot find `tui-test`, restart the terminal or check that the ins
 
 Library sessions run in your process and do not require the CLI.
 
-<Tabs>
+<Tabs syncKey="example-language">
   <TabItem label="Python">
     Requires Python 3.8 or newer.
 
     ```sh
     pip install tui-test
     ```
+
+    The wheel includes the native library.
+    [Python API](/docs/api/python/)
 
   </TabItem>
   <TabItem label="JavaScript">
@@ -60,6 +68,11 @@ Library sessions run in your process and do not require the CLI.
     npm install @microsoft/tui-test
     ```
 
+    The package is ESM only. Keep optional dependencies enabled; they include
+    native platform binaries. Bun and Deno are best effort; Deno 2 needs local
+    `node_modules` and `--allow-ffi`.
+    [JavaScript and TypeScript API](/docs/api/javascript/)
+
   </TabItem>
   <TabItem label="Rust">
     Requires Rust 1.90 or newer.
@@ -68,7 +81,10 @@ Library sessions run in your process and do not require the CLI.
     cargo add tui-test-rs
     ```
 
-    [Rust API reference](https://docs.rs/tui-test-rs/latest/tui_test/)
+    Add `recording-raster` for APNG, GIF, and MP4 output. It uses installed
+    fonts; `recording-font-jetbrains-mono*` features bundle a font.
+    [Rust guide](/docs/api/rust/) and
+    [full API reference](https://docs.rs/tui-test-rs/latest/tui_test/)
   </TabItem>
   <TabItem label="Go">
     Requires Go 1.26 or newer. Published modules include the native engine.
@@ -77,5 +93,12 @@ Library sessions run in your process and do not require the CLI.
     go get github.com/microsoft/tui-test/bindings/go@latest
     ```
 
+    Published modules support Linux and macOS on `amd64` and `arm64`, and
+    Windows on `amd64`. Linux requires glibc 2.28+ or musl 1.2+.
+    [Go API and runtime requirements](/docs/api/go/)
+
   </TabItem>
 </Tabs>
+
+To use an existing native library, set `TUI_TEST_NATIVE_LIBRARY` to its absolute
+path. It must match your language package's release and platform.

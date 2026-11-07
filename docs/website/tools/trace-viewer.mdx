@@ -1,0 +1,81 @@
+---
+title: Trace viewer
+description: Retain session traces and inspect terminal actions and failures.
+editUrl: false
+sidebar:
+  order: 3
+---
+
+## Enable traces
+
+Configure tracing before opening the terminal:
+
+```toml
+[trace]
+mode = "on-failure"
+directory = "./traces"
+```
+
+In JavaScript use `trace: { mode: "on-failure", directory: "artifacts/traces" }`;
+Python uses the corresponding `trace` dictionary.
+Go uses `ClientOptions.Trace` with `TraceOnFailure`.
+
+## Trace modes and retention
+
+`off` is the default. `on-failure` retains failed sessions, and `on` retains
+every session. Trace and recording-inclusive artifact settings can persist
+terminal output, so select them deliberately.
+
+In Go, pass `CloseOptions{Failed: tuitest.Ptr(true)}` for a failure outside a
+tui-test assertion. The `tuitesttest` helper reports test failure during cleanup.
+
+## Open the HTML report
+
+Open the retained `trace.html` file in a browser to review the session.
+
+## Explore an example
+
+The sample app renders "Deployed" in red while the test expects green.
+Open the report to step through the actions, inspect the highlighted cells,
+and view the captured output.
+
+[Open example trace](/docs-assets/trace-viewer/index.html)
+
+[![Example trace showing a failed deployment-status color assertion](/docs-assets/trace-viewer/preview.png)](/docs-assets/trace-viewer/index.html)
+
+## Inspect actions and assertions
+
+Select an action to inspect its inputs, result, and assertion evidence.
+Compare the failing locator or expected value with the terminal state at that
+point.
+
+## Navigate terminal frames
+
+Use the timeline to inspect captured terminal frames around the failure.
+Frames help distinguish a missing state from an assertion that ran before the
+expected state appeared.
+
+## Inspect cells and locator matches
+
+Inspect cell text, colors, styles, and locator spans when visible text alone
+does not explain the result. A hyperlink constraint checks cell metadata,
+not the spelling of a URL on screen.
+
+## View attachments
+
+The report's attachments contain captured evidence.
+Failure to write an optional artifact does not replace the original assertion
+error; inspect artifact write status when an expected file is absent.
+
+## Replay the session recording
+
+Replay `session.cast` with an asciinema-compatible player.
+The cast stores terminal output and resize events; its player selects the
+emulator. It does not record native history viewport movement.
+
+## Read Markdown and JSON evidence
+
+Agents should read `trace.md` first, then use `trace.json` and `timeline.json`
+for structured evidence rather than parsing HTML.
+Review traces before sharing them because they can contain terminal output,
+titles, locator operands, and recordings.

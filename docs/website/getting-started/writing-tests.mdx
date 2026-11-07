@@ -1,0 +1,201 @@
+---
+title: Writing tests
+description: Set up terminal tests with a language API and test runner.
+editUrl: false
+sidebar:
+  order: 3
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Use your language's test runner. `tui-test` supplies terminal sessions, locators,
+and assertions; it does not replace the runner.
+Install the matching [library](/docs/install/#libraries) first.
+
+## Write a test
+
+These examples launch a child process, wait for its output, and close the
+session even if the test fails.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    Save as `terminal.test.mjs`. It uses Node's built-in test runner.
+
+    ```js
+    import test from "node:test";
+    import { withTerminal } from "@microsoft/tui-test/test";
+
+    test("prints Ready", async () => {
+      await withTerminal(
+        { program: [process.execPath, "-e", "console.log('Ready')"] },
+        async (terminal) => {
+          await terminal.getByText("Ready").expect();
+          await terminal.waitExit();
+          await terminal.expectExitCode(0);
+        },
+      );
+    });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    Save as `test_terminal.py`. `IsolatedAsyncioTestCase` is part of Python's
+    standard library.
+
+    ```python
+    import sys
+    import unittest
+    from tui_test.testing import terminal
+
+    class TerminalTests(unittest.IsolatedAsyncioTestCase):
+        async def test_ready(self):
+            async with terminal(
+                program=(sys.executable, "-c", "print('Ready')")
+            ) as app:
+                await app.get_by_text("Ready").expect()
+                await app.wait_exit()
+                await app.expect_exit_code(0)
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    Save as `terminal_test.go` in a Go module. The helper opens a shell and
+    registers test cleanup before the terminal starts.
+
+    ```go
+    package terminal_test
+
+    import (
+        "testing"
+
+        "github.com/microsoft/tui-test/bindings/go"
+        "github.com/microsoft/tui-test/bindings/go/tuitesttest"
+    )
+
+    func TestTerminal(t *testing.T) {
+        terminal := tuitesttest.New(t, tuitesttest.Options{})
+        if err := terminal.Submit(tuitest.Ptr("echo hello")); err != nil {
+            t.Fatal(err)
+        }
+        if err := terminal.WaitCommand(tuitest.WaitOptions{}); err != nil {
+            t.Fatal(err)
+        }
+        if err := terminal.GetByText("hello", tuitest.TextSelectorOptions{}).
+            Last().Expect(tuitest.LocatorExpectOptions{}); err != nil {
+            t.Fatal(err)
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    Save as `tests/terminal.rs`. Keep the operation result until after cleanup.
+
+    ```rust
+    use tui_test::{OpenOptions, Operation, Session};
+
+    #[test]
+    fn terminal_output() -> Result<(), Box<dyn std::error::Error>> {
+        let terminal = Session::new("terminal-output");
+        terminal.open(OpenOptions::default())?;
+        let result = (|| {
+            terminal.execute(Operation::Submit {
+                data: Some("echo hello".into()),
+            })?;
+            terminal.get_by_text("hello").last().expect()
+        })();
+        terminal.close()?;
+        result?;
+        Ok(())
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Interact with an app
+
+Replace the example program with your executable. Use locators for visible
+labels instead of hard-coded coordinates:
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.getByText("Ready").expect();
+    await terminal.getByText("Continue").click({ button: "left", clicks: 1 });
+    await terminal.getByText("Done").expect();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.get_by_text("Ready").expect()
+    await terminal.get_by_text("Continue").click(button="left", clicks=1)
+    await terminal.get_by_text("Done").expect()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{LocatorClickOptions, MouseButton, MouseOptions};
+
+    terminal.get_by_text("Ready").expect()?;
+    terminal
+        .get_by_text("Continue")
+        .click_with(LocatorClickOptions {
+            mouse: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+            clicks: 1,
+            ..Default::default()
+        })?;
+    terminal.get_by_text("Done").expect()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Continue", tuitest.TextSelectorOptions{}).Click(tuitest.LocatorClickOptions{MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left}, Clicks: tuitest.Ptr(uint32(1))}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Done", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test expect text "Ready"
+    tui-test click text "Continue"
+    tui-test expect text "Done"
+    ```
+  </TabItem>
+</Tabs>
+
+A locator resolves against the latest screen before each action.
+`expect()` and `click()` retry; reads such as `count()` and `locations()` report
+the current state. See [locators](/docs/guides/locators/) for text, styles,
+hyperlinks, and relative matches.
+
+## Assert the right result
+
+Visible output, command completion, and process exit are different conditions.
+Use `waitCommand()` after a shell `submit()`, and `waitExit()` after a direct
+`run()`. Assert an exit code separately when success depends on it.
+`waitIdle()` only means the screen stopped changing.
+
+## Isolate and clean up sessions
+
+Use an ephemeral session or a test helper for each test. Named clients can
+share a session within the same process, so reusing a name can make tests
+interfere with each other.
+
+JavaScript's `withTerminal`, Python's `terminal` context manager, and Go's
+`tuitesttest.New` handle cleanup. For manual sessions, use `finally`, an async
+context manager, or `defer`. Cancellation does not confirm that a native
+operation stopped; close the session explicitly.
+
+Continue with [running tests](/docs/getting-started/running-tests/) to select
+tests, run in parallel, and retain failures.

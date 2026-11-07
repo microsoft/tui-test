@@ -1,0 +1,383 @@
+---
+title: Your first session
+description: A first terminal session with the CLI or a language API.
+editUrl: false
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Open a shell or run an app
+
+After [installation](/docs/install/), open a named shell session:
+
+The header's example-language selector keeps your choice across pages.
+Python snippets run inside an async function. Rust snippets use `?` inside a
+function returning `Result`. Go snippets use a test's `t` and the `tuitest`
+package, with `fmt` or `time` where needed. See
+[writing tests](/docs/getting-started/writing-tests/) for complete test files.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    import { TuiTest } from "@microsoft/tui-test";
+
+    const terminal = new TuiTest("hello");
+    await terminal.open({ cols: 80, rows: 30 });
+    await terminal.submit("echo hello");
+    await terminal.waitCommand();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    from tui_test import TuiTest
+
+    terminal = TuiTest("hello")
+    await terminal.open(cols=80, rows=30)
+    await terminal.submit("echo hello")
+    await terminal.wait_command()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{OpenOptions, Operation};
+
+    let terminal = tui_test::Session::new("hello");
+    terminal.open(OpenOptions {
+        cols: 80,
+        rows: 30,
+        ..Default::default()
+    })?;
+    terminal.execute(Operation::Submit {
+        data: Some("echo hello".into()),
+    })?;
+    terminal.execute(Operation::WaitCommand { timeout_ms: None })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    terminal, err := tuitest.New("hello", tuitest.ClientOptions{})
+    if err != nil {
+        t.Fatal(err)
+    }
+    t.Cleanup(func() { terminal.CloseQuiet() })
+    if _, err := terminal.Open(tuitest.OpenOptions{SpawnOptions: tuitest.SpawnOptions{Cols: tuitest.Ptr(uint16(80)), Rows: tuitest.Ptr(uint16(30))}}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Submit(tuitest.Ptr("echo hello")); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.WaitCommand(tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test --session hello open --cols 80 --rows 30
+    tui-test --session hello submit "echo hello"
+    tui-test --session hello wait command
+    ```
+  </TabItem>
+</Tabs>
+
+`open` starts the platform's default shell. `submit` types a command and presses
+Enter. `wait command` waits for that command to finish.
+The session persists between CLI invocations.
+
+To launch a program directly, use `tui-test --session hello run --restart my-app`.
+Replace `my-app` with your executable and put its arguments after the name.
+Use `wait exit` to wait for a directly launched program to terminate.
+
+## Find text
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.getByText("hello").locations());
+    await terminal.getByText("hello").last().expect();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.get_by_text("hello").locations())
+    await terminal.get_by_text("hello").last().expect()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    println!("{:?}", terminal.get_by_text("hello").locations()?);
+    terminal.get_by_text("hello").last().expect()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.GetByText("hello", tuitest.TextSelectorOptions{}).Locations()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    if err := terminal.GetByText("hello", tuitest.TextSelectorOptions{}).Last().Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test --session hello find text "hello"
+    tui-test --session hello expect text "hello" --match last
+    ```
+  </TabItem>
+</Tabs>
+
+`find` returns the matches on the current screen.
+`expect` retries until the selected text appears or its timeout expires.
+Selecting the last match avoids ambiguity with a shell's echoed command.
+
+## Send input
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.type("echo another command");
+    await terminal.keyboard.press("Enter");
+    await terminal.waitCommand();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.type("echo another command")
+    await terminal.keyboard.press("Enter")
+    await terminal.wait_command()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{KeyAction, Operation};
+
+    terminal.execute(Operation::Write {
+        data: "echo another command".into(),
+    })?;
+    terminal.execute(Operation::Key {
+        keys: vec!["Enter".into()],
+        action: KeyAction::Press,
+    })?;
+    terminal.execute(Operation::WaitCommand { timeout_ms: None })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Type("echo another command"); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Keyboard.Press("Enter"); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.WaitCommand(tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test --session hello type "echo another command"
+    tui-test --session hello key press Enter
+    tui-test --session hello wait command
+    ```
+  </TabItem>
+</Tabs>
+
+For an app with mouse support, `click text "Continue"` finds the label and clicks
+its middle cell. Text locators, input, and waits are also available in each
+[language API](/docs/install/#libraries).
+
+## Wait for output
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.expectOutput("another command");
+    await terminal.expectExitCode(0);
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.expect_output("another command")
+    await terminal.expect_exit_code(0)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.execute(Operation::ExpectOutput {
+        text: "another command".into(),
+        regex: false,
+    })?;
+    terminal.execute(Operation::ExpectExitCode {
+        code: 0,
+        timeout_ms: None,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.ExpectOutput("another command", tuitest.OutputOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.ExpectExitCode(0, tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test --session hello expect output "another command"
+    tui-test --session hello expect exit-code 0
+    ```
+  </TabItem>
+</Tabs>
+
+Command output is separate from visible screen text. Wait for command completion
+before asserting its output or exit code. For an app that stays open, wait for
+a visible state with a text locator instead.
+
+## Inspect the terminal
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.text({ full: false }));
+    console.log(await terminal.state());
+    console.log(await terminal.screenshot("hello.svg"));
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.text(full=False))
+    print(await terminal.state())
+    print(await terminal.screenshot("hello.svg"))
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    println!("{:?}", terminal.execute(Operation::Text { full: false })?);
+    println!("{:?}", terminal.execute(Operation::State)?);
+    println!(
+        "{:?}",
+        terminal.execute(Operation::Screenshot {
+            full: false,
+            path: Some("hello.svg".into()),
+            zoom: None,
+            background: None
+        })?
+    );
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.Text(tuitest.TextOptions{Full: false})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    {
+        value, err := terminal.State()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    {
+        value, err := terminal.Screenshot("hello.svg", tuitest.ScreenshotOptions{})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test --session hello text
+    tui-test --session hello state --json
+    tui-test --session hello screenshot -o hello.svg
+    ```
+  </TabItem>
+</Tabs>
+
+`state --json` includes visible text, dimensions, cursor, modes, and command state.
+The screenshot writes an SVG; a `.png` extension selects PNG.
+
+## Close the session
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.close();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.close()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    terminal.close()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Close(); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test --session hello close
+    ```
+  </TabItem>
+</Tabs>
+
+Close sessions in cleanup code so a failed assertion does not leave a child
+running. [Writing tests](/docs/getting-started/writing-tests/) shows helpers that
+do this for you.

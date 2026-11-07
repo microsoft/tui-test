@@ -1,0 +1,168 @@
+---
+title: Running tests
+description: Run terminal tests locally, in parallel, and in CI.
+editUrl: false
+sidebar:
+  order: 4
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Run tests with your language's test runner
+
+The examples in [writing tests](/docs/getting-started/writing-tests/) use the
+standard runners:
+
+| Language | Command |
+| --- | --- |
+| JavaScript | `node --test terminal.test.mjs` |
+| Python | `python -m unittest test_terminal` |
+| Go | `go test ./...` |
+| Rust | `cargo test` |
+
+Library tests run in-process and do not need a CLI daemon.
+
+## Run a single test
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```sh
+    node --test --test-name-pattern="prints Ready" terminal.test.mjs
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```sh
+    python -m unittest test_terminal.TerminalTests.test_ready
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```sh
+    cargo test terminal_output
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```sh
+    go test -run '^TestTerminal$' ./...
+    ```
+  </TabItem>
+</Tabs>
+
+## Run tests in parallel
+
+Give each test a unique session. The JavaScript and Python test helpers and
+`TuiTest.ephemeral()` generate names for you. Go's `tuitesttest.New` registers
+cleanup and keeps options local to each test, including tests using `t.Parallel()`.
+
+Rust callers should use a distinct name for each session they register.
+Avoid process-wide cleanup such as `closeAll()` while unrelated tests are
+running. Separate CLI jobs should use different `--session` names.
+
+## Configure the test environment
+
+Set dimensions, working directory, environment, backend, and timeouts in the
+launch options. The default grid is 80 columns by 30 rows, and the default
+backend is Alacritty. A fixed grid is useful when comparing layouts or
+[snapshots](/docs/guides/snapshots/).
+
+Install the shell or application your test launches. Keep native dependencies
+from the same release as the binding. See the [Go runtime requirements](/docs/api/go/#install)
+and [contributor guide](/docs/contributing/#build-from-source) for source builds.
+
+## Run tests in CI
+
+Run the same test command after installing the language package and building
+your app. A graphical desktop is not required to inspect terminal state.
+Use launch options to select a shell that is available on the runner.
+
+For example, after installing the JavaScript package:
+
+```yaml
+- run: node --test terminal.test.mjs
+```
+
+MP4 recording needs `ffmpeg` on `PATH`. Rust raster captures need
+`recording-raster` and fonts; a `recording-font-jetbrains-mono*` feature bundles
+fonts. See [recordings](/docs/tools/recordings/).
+
+## Collect failure artifacts
+
+Configure traces before starting a terminal. In JavaScript:
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    const options = {
+      trace: { mode: "on-failure", directory: "artifacts/traces" },
+      artifacts: {
+        dir: "artifacts/failures",
+        onFailure: "all",
+        includeRecording: true,
+      },
+    };
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    options = {
+        "trace": {"mode": "on-failure", "directory": "artifacts/traces"},
+        "artifacts": {
+            "dir": "artifacts/failures",
+            "on_failure": "all",
+            "include_recording": True,
+        },
+    }
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    let context = tui_test::ExecutionContext {
+        trace: Some(tui_test::TraceOptions {
+            mode: tui_test::TraceMode::OnFailure,
+            directory: "artifacts/traces".into(),
+        }),
+        artifact: Some(tui_test::FailureArtifactOptions {
+            directory: "artifacts/failures".into(),
+            mode: tui_test::FailureArtifactMode::All,
+            include_recording: true,
+        }),
+        ..Default::default()
+    };
+    let terminal = terminal.with_execution_context(context);
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    options := tuitest.ClientOptions{
+        Trace: &tuitest.TraceOptions{
+            Mode:      tuitest.TraceOnFailure,
+            Directory: "artifacts/traces",
+        },
+        Artifacts: &tuitest.ArtifactOptions{
+            Dir:              "artifacts/failures",
+            OnFailure:        tuitest.ArtifactAll,
+            IncludeRecording: true,
+        },
+    }
+    terminal, err := tuitest.New("test", options)
+    if err != nil {
+        t.Fatal(err)
+    }
+    t.Cleanup(func() { terminal.CloseQuiet() })
+    ```
+  </TabItem>
+</Tabs>
+
+Pass these options to the client or test helper.
+Rust attaches them through an `ExecutionContext` before opening the session.
+The [trace viewer](/docs/tools/trace-viewer/) reads `trace.html`; automated
+consumers should use `trace.md`, `trace.json`, and `timeline.json`.
+Review output before uploading it: traces may contain terminal text, titles,
+locator operands, and recordings.

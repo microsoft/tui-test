@@ -1,0 +1,238 @@
+---
+title: Terminal state
+description: Read terminal text, cells, modes, and process state.
+editUrl: false
+sidebar:
+  order: 6
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Session state
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.state());
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.state())
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    println!("{:?}", terminal.execute(Operation::State)?);
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.State()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test state --json
+    ```
+  </TabItem>
+</Tabs>
+
+`state` returns visible text and terminal dimensions with command, process-exit,
+cursor, mode, mouse-mode, color, timeout, readiness, and bell state.
+The language APIs return a typed `State`.
+
+## Visible text and full text
+
+`text` reads the selected viewport. `text --full` reads retained history plus
+the live screen, independently of the viewport.
+In JavaScript use `text({ full: true })`; in Python use `text(full=True)`;
+Go uses `Text(TextOptions{Full: true})`.
+
+## Cells, styles, and hyperlinks
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.cells(0, 0, 20, 2));
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.cells(0, 0, 20, 2))
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    println!(
+        "{:?}",
+        terminal.execute(Operation::Cells {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 2
+        })?
+    );
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.Cells(0, 0, 20, 2)
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test cells 0 0 20 2 --json
+    ```
+  </TabItem>
+</Tabs>
+
+The arguments are `X Y [W H]` in zero-based terminal cells.
+Cells expose text and style information, including foreground and background
+colors, underline style and color, attributes, and OSC 8 link metadata.
+Go exposes hyperlink metadata through `Cell.Link` and `Cell.LinkID`.
+
+## Command output and process state
+
+`get command`, `get output`, and `get exit-code` read the last tracked shell
+command, its output, and its status. An unavailable value is distinct from an
+empty string or exit code zero; the language APIs preserve it with nullable
+values or pointers.
+
+Use `wait command` after submitting a shell command, or `wait exit` after
+launching a program directly. See [waiting](/docs/guides/waiting/).
+
+## Working directory
+
+`get cwd` returns the tracked working directory. Launch options can set the
+child's initial directory with `--cwd` or the language's `cwd` option.
+
+## Cursor and terminal size
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.getCursor());
+    console.log(await terminal.getSize());
+    console.log(await terminal.getViewport());
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.get_cursor())
+    print(await terminal.get_size())
+    print(await terminal.get_viewport())
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    println!("{:?}", terminal.execute(Operation::GetCursor)?);
+    println!("{:?}", terminal.execute(Operation::GetSize)?);
+    println!("{:?}", terminal.execute(Operation::GetViewport)?);
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.GetCursor()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    {
+        value, err := terminal.GetSize()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    {
+        value, err := terminal.GetViewport()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test get cursor --json
+    tui-test get size --json
+    tui-test get viewport --json
+    ```
+  </TabItem>
+</Tabs>
+
+The cursor includes position, visibility, shape, and color.
+Cursor state retains application coordinates even while viewing history.
+Captures project the cursor into the selected viewport and hide it when it
+falls outside the view. `get viewport` reports history offset and available
+rows. An offset of zero means the live screen.
+
+## Window title
+
+`get title` reads the terminal title. Use `wait title` or `expect title`
+when a test must wait for a particular value.
+
+## Clipboard and bells
+
+`get clipboard` reads the session clipboard.
+`get bells` reads the cumulative bell count, and `get bell-events` returns
+the event records. Use the corresponding waits rather than polling them in
+a fixed-delay loop.
+
+## Terminal modes
+
+`get modes` and `state.modes` report boolean modes with all keys present.
+`state.mouse_mode` is `none`, `click`, `drag`, or `motion`.
+Cursor visibility and wrapping are on by default.
+`expect mode NAME [--off]` asserts a mode.
+
+## Terminal colors and palette
+
+`get colors` and `state.colors` report foreground, background, cursor, and
+palette overrides that differ from the profile. Unchanged values use the
+session profile.
+
+```sh
+tui-test get colors --json
+tui-test expect colors --background '#1d1f21'
+```
+
+See [configuration](/docs/reference/configuration/#terminal-colors) for profile
+colors and [assertions](/docs/guides/assertions/) for color checks.

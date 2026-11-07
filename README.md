@@ -1,31 +1,14 @@
 # tui-test
 
-`tui-test` controls, inspects, tests, and records real shell sessions and full-screen terminal apps on Windows, Linux, and macOS. Use it from the CLI or call the same engine from Rust, Python, JavaScript, or Go. It works for AI agents that need structured access to terminal state, terminal automation, and terminal ui application testing.
+Control, inspect, test, and record real shell sessions and full-screen terminal
+apps on Windows, Linux, and macOS. Use the CLI or the in-process Rust, Python,
+JavaScript, and Go APIs for terminal automation, application tests, and AI agents.
 
-<p align="center">
-  <a href="#installation">Installation</a>
-  ·
-  <a href="#quick-start">Quick start</a>
-  ·
-  <a href="#agent-commands">AI agents</a>
-  ·
-  <a href="#api-references">API references</a>
-  ·
-  <a href="#configuration">Configuration</a>
-</p>
+[Documentation](https://tui-test.dev/docs/install/) |
+[Writing tests](https://tui-test.dev/docs/getting-started/writing-tests/) |
+[CLI reference](https://tui-test.dev/docs/reference/cli/)
 
 ## Installation
-
-### CLI
-
-#### Homebrew
-
-```sh
-brew tap microsoft/tui-test https://github.com/microsoft/tui-test
-brew install tui-test
-```
-
-#### Install script
 
 macOS and Linux:
 
@@ -39,439 +22,68 @@ Windows:
 irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
 ```
 
-You can also download a binary from [GitHub Releases](https://github.com/microsoft/tui-test/releases).
+Or install with Homebrew:
 
-### Libraries
+```sh
+brew tap microsoft/tui-test https://github.com/microsoft/tui-test
+brew install tui-test
+```
+
+Platform archives are available from [GitHub Releases](https://github.com/microsoft/tui-test/releases).
 
 | Language | Install | Reference |
 | --- | --- | --- |
-| Rust 1.90+ | `cargo add tui-test-rs@0.1.1` | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
-| Python 3.8+ | `pip install tui-test` | [Python API](bindings/python/README.md) |
-| Node 20+ | `npm install @microsoft/tui-test` | [JavaScript API](bindings/js/README.md) |
-| Go 1.26+ | `go get github.com/microsoft/tui-test/bindings/go@v0.1.1` | [Go API](bindings/go/README.md) |
+| Rust 1.90+ | `cargo add tui-test-rs@0.1.1` | [Rust](https://tui-test.dev/docs/api/rust/) |
+| Python 3.8+ | `pip install tui-test` | [Python](https://tui-test.dev/docs/api/python/) |
+| Node.js 20+ | `npm install @microsoft/tui-test` | [JavaScript and TypeScript](https://tui-test.dev/docs/api/javascript/) |
+| Go 1.26+ | `go get github.com/microsoft/tui-test/bindings/go@v0.1.1` | [Go](https://tui-test.dev/docs/api/go/) |
 
-Add the Rust `recording-raster` feature for APNG, GIF, and MP4 output. It uses installed fonts; `recording-font-jetbrains-mono*` bundles a font.
-
-Go, Python, and JavaScript use one [native adapter crate](crates/tui-test-ffi/README.md).
-All three use its generated C ABI declarations through purego, ctypes, and Koffi, respectively.
-Set `TUI_TEST_NATIVE_LIBRARY` to select a matching library explicitly.
+Library sessions do not require the CLI. See the
+[installation guide](https://tui-test.dev/docs/install/) for native runtime
+requirements and recording features.
 
 ## Quick start
 
-The CLI and libraries expose the same terminal actions. Python, JavaScript, Rust, and Go sessions run in-process and do not require the CLI. Released Go modules include the native engine; see [Go installation](bindings/go/README.md#install) for supported platforms and Linux runtime requirements.
-
-### CLI
-
 ```sh
-tui-test run my-app
-tui-test expect text "Ready"
-tui-test click text "Continue"
-tui-test expect text "Done"
+tui-test open
+tui-test submit "echo hello"
+tui-test wait command
+tui-test expect output "hello"
 tui-test screenshot -o result.svg
 tui-test close
 ```
 
-Record a trusted tape as a GIF:
-
-```sh
-tui-test tape check crates/tui-test/tests/fixtures/tape/run.tape --json
-tui-test tape run crates/tui-test/tests/fixtures/tape/run.tape
-```
-
-Run these commands from the repository root.
-The example writes `tape-example.gif` in that directory.
-The commands report the effective terminal grid, pixel dimensions, and source-located warnings.
-Tape execution uses an isolated local session, not a daemon session.
-Warning: Run only trusted tapes. Tapes can execute shell commands; they are not sandboxed.
-See the [tape reference](references/tape.md) for the supported subset and a standalone example.
-
-### Python
-
-```python
-import asyncio
-from tui_test import TuiTest
-
-async def main():
-    async with TuiTest.ephemeral() as terminal:
-        await terminal.run("my-app")
-        await terminal.get_by_text("Ready").expect()
-        await terminal.get_by_text("Continue").click()
-        await terminal.get_by_text("Done").expect()
-
-asyncio.run(main())
-```
-
-[Python API reference](bindings/python/README.md)
-
-### JavaScript
-
-```js
-import { TuiTest } from "@microsoft/tui-test";
-
-const terminal = TuiTest.ephemeral();
-
-try {
-  await terminal.run("my-app");
-  await terminal.getByText("Ready").expect();
-  await terminal.getByText("Continue").click();
-  await terminal.getByText("Done").expect();
-} finally {
-  await terminal.closeQuiet();
-}
-```
-
-[JavaScript API reference](bindings/js/README.md)
-
-### Rust
-
-```rust
-use tui_test::{OpenOptions, Operation, Session};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let terminal = Session::new("example");
-    terminal.open(OpenOptions::default())?;
-    terminal.execute(Operation::Submit {
-        data: Some("echo hello".into()),
-    })?;
-    terminal.get_by_text("hello").last().expect()?;
-    terminal.close()?;
-    Ok(())
-}
-```
-
-[Rust API reference](https://docs.rs/tui-test-rs/latest/tui_test/)
-
-### Go
-
-```go
-package main
-
-import (
-    "log"
-
-    "github.com/microsoft/tui-test/bindings/go"
-)
-
-func main() {
-    terminal, err := tuitest.Ephemeral("example", tuitest.ClientOptions{})
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer terminal.CloseQuiet()
-
-    if _, err := terminal.Run("my-app", nil, tuitest.SpawnOptions{}); err != nil {
-        log.Fatal(err)
-    }
-    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
-        log.Fatal(err)
-    }
-}
-```
-
-[Go installation and API reference](bindings/go/README.md)
-
-## API references
-
-| Surface | Reference |
-| --- | --- |
-| CLI | [CLI reference](#cli-reference) |
-| Rust | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
-| Python | [bindings/python/README.md](bindings/python/README.md) |
-| JavaScript | [bindings/js/README.md](bindings/js/README.md) |
-| Go | [bindings/go/README.md](bindings/go/README.md) |
-
-## CLI reference
-
-### Global options
-
-| Option | Description |
-| --- | --- |
-| `--session NAME` | Select a session. Default: `default` or `TUI_TEST_SESSION`. |
-| `--json` | Print JSON. |
-| `--verbose`, `-v` | Write a session log. |
-| `--failure-artifacts DIR` | Write structured assertion artifacts. |
-| `--failure-artifact-mode MODE` | Select `none`, `text`, `html`, or `all` (default when exports are enabled). |
-| `--failure-artifact-recording` | Copy the automatic cast through the failure boundary. |
-| `--diagnostic-context KEY=VALUE` | Add safe caller context to failure details. |
-
-CLI sessions persist between commands. `open` and `run` reuse a live session unless `--restart` is set.
-
-### Sessions
-
-| Command | Description |
-| --- | --- |
-| `open [options]` | Open a shell. |
-| `run [options] PROGRAM [ARGS...]` | Run a program. |
-| `[global options] -- PROGRAM [ARGS...]` | Alias for `run`. |
-| `restart [--graceful-timeout MS]` | Restart the session. |
-| `sessions` | List sessions. |
-| `close [--all]` | Close one or all sessions. |
-| `daemon start` | Start the session daemon. |
-| `daemon status` | Show daemon status. |
-| `daemon stop [--all]` | Stop one or all daemons. |
-
-`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, `--timeout-<class> MS`, and `--screen-history-limit COUNT`. `open` also accepts `--shell`.
-
-### Text locators
-
-```sh
-tui-test find text TEXT [options]
-tui-test expect text TEXT [options]
-tui-test click text TEXT [options]
-tui-test highlight text TEXT [options]
-```
-
-| Command | Description |
-| --- | --- |
-| `find text` | Return current matches and cell spans. |
-| `expect text` | Retry until the locator passes. |
-| `click text` | Retry, then click the middle cell. |
-| `highlight text` | Mark matches in screenshots and the live monitor. |
-
-Locator options:
-
-| Option | Description |
-| --- | --- |
-| `--regex` | Treat `TEXT` as a regular expression. |
-| `--full` | Include scrollback. |
-| `--whitespace exact\|normalize` | Choose whitespace matching. |
-| `--after-text TEXT` | Search after an anchor. |
-| `--before-text TEXT` | Search before an anchor. |
-| `--after-regex`, `--before-regex` | Treat the anchor as a regular expression. |
-| `--after-match MODE`, `--before-match MODE` | Select an anchor with `any`, `unique`, `first`, or `last`. |
-| `--after-nth N`, `--before-nth N` | Select a zero-based anchor. |
-| `--match MODE` | Select `any`, `unique`, `first`, or `last`. |
-| `--nth N` | Select a zero-based match. |
-
-Style options are `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, and `--blink`. Boolean styles accept `=false`.
-
-`--link URI` separately requires every matched cell, including spaces, to
-have that OSC 8 target. `--link ""` requires no link.
-
-Programmatic locators add `getByLink()` / `get_by_link()`, cell-set
-intersection and union (`and`/`or` in Rust and JavaScript, `and_`/`or_` in
-Python), and locator-only `filter` containment. AND/OR form new contiguous
-per-row runs; filters preserve whole matches. See the
-[JavaScript](bindings/js/README.md#compose-locators) and
-[Python](bindings/python/README.md#compose-locators) composition examples.
-
-`expect text` also accepts `--not` and `--timeout MS`. `click text` accepts `--button left|middle|right`, `--alt`, `--ctrl`, `--shift`, `--clicks N`, and `--timeout MS`. `highlight text` accepts `--timeout MS`.
-
-### Keyboard and mouse
-
-| Command | Description |
-| --- | --- |
-| `submit [TEXT]` | Type text and press Enter. |
-| `type TEXT` | Type text. |
-| `write DATA` | Write raw bytes. |
-| `key press KEYS...` | Press keys. |
-| `key down KEYS...` | Send keydown events. |
-| `key repeat KEYS...` | Send repeat events. |
-| `key up KEYS...` | Send keyup events. |
-| `mouse click [X Y] [options]` | Click a cell or `--on-text TEXT`. |
-| `mouse move X Y` | Move the pointer. |
-| `mouse down X Y [options]` | Press a mouse button. |
-| `mouse up X Y [options]` | Release a mouse button. |
-| `mouse drag X1 Y1 X2 Y2 [options]` | Drag between cells. |
-| `mouse scroll up\|down [--amount N]` | Send mouse wheel input to the application. |
-| `scroll up\|down [LINES]` | Move the native history viewport; default: one row. |
-| `scroll top\|bottom` | Show the oldest output or return to the live screen. |
-| `resize COLS ROWS` | Resize the terminal. |
-| `signal INT\|TERM\|KILL\|QUIT` | Send a signal. |
-| `kill` | Kill the child process. |
-
-Mouse button actions accept `--button left|middle|right`, `--alt`, `--ctrl`, and `--shift`. Click also accepts `--clicks N`.
-
-Named keys include arrows, Home, End, PageUp, PageDown, Insert, Delete, Backspace, Tab, Enter, Space, Escape, and F1 through F12. Join modifiers such as Ctrl, Alt, Shift, Super, Meta, or Hyper with `+`.
-
-### Read state
-
-| Command | Description |
-| --- | --- |
-| `state` | Print session state and visible text. |
-| `text [--full]` | Print terminal text. |
-| `cells X Y [W H]` | Return cells and styles. |
-| `get command` | Return the last command. |
-| `get output` | Return the last command output. |
-| `get exit-code` | Return the last exit code. |
-| `get cwd` | Return the working directory. |
-| `get cursor` | Return the cursor position. |
-| `get viewport` | Return the history offset and available rows. |
-| `get size` | Return the terminal size. |
-| `get title` | Return the window title. |
-| `get clipboard` | Return the session clipboard. |
-| `get bells` | Return the bell count. |
-| `get bell-events` | Return bell events. |
-
-Native scrolling changes the visible viewport without mouse input to the application.
-New output preserves the historical view. Keyboard input returns to the live screen.
-Mouse input and historical locator clicks fail until you return to the live screen.
-Full-text reads remain independent of the viewport.
-See the [history reference](references/cli.md#native-history),
-[JavaScript example](bindings/js/examples/scrollback.mjs), and
-[Rust example](crates/tui-test/examples/scrollback.rs).
-
-### Wait and assert
-
-| Command | Description |
-| --- | --- |
-| `wait title TEXT [--regex --not --timeout MS]` | Wait for a title. |
-| `wait clipboard [TEXT] [--regex --timeout MS]` | Wait for a clipboard change or match. |
-| `wait idle [--timeout MS]` | Wait for the screen to stop changing. |
-| `wait command [--timeout MS]` | Wait for a submitted command. |
-| `wait exit [--timeout MS]` | Wait for the program to exit. |
-| `wait ready [--timeout MS]` | Wait for a shell prompt. |
-| `wait bell [--timeout MS]` | Wait for a bell. |
-| `expect title TEXT [--regex --not --timeout MS]` | Assert the title. |
-| `expect exit-code CODE [--timeout MS]` | Assert the last exit code. |
-| `expect output TEXT [--regex]` | Assert command output. |
-| `expect bell COUNT [--timeout MS]` | Wait until the cumulative bell count reaches `COUNT`. |
-| `expect snapshot NAME [-u] [--include-style] [--include-title]` | Assert a snapshot. |
-
-Use `wait command` after `submit`, `wait exit` after `run`, and text locators for visible state. `wait idle` only means the screen stopped changing.
-
-Timeout defaults:
-
-| Class | Default |
-| --- | --- |
-| `text` | 5 seconds |
-| `idle` | 5 seconds |
-| `command` | 30 seconds |
-| `exit` | 30 seconds |
-| `ready` | 30 seconds |
-
-### Capture
-
-| Command | Description |
-| --- | --- |
-| `screenshot [PATH] [-o PATH] [--full] [--zoom N] [--background COLOR \| --transparent]` | Print text or save SVG or PNG. |
-| `record start PATH [options] [--background COLOR \| --transparent]` | Start APNG, GIF, MP4, or asciinema recording. |
-| `record stop` | Finish the recording. |
-| `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema recording. |
-| `monitor [--interactive]` | Watch a CLI session or send input with `--interactive`. |
-
-`record start` options: `--format`, `--fps`, `--speed`, `--idle-time-limit`, `--zoom`, `--background`, and `--transparent`. MP4 requires `ffmpeg` and does not support transparency. Cast recordings do not support canvas options.
-
-The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `--format` overrides it.
-
-#### Record
-
-<p align="center">
-  <img alt="animated terminal recording created by tui-test" src="static/recording.gif" width="400">
-</p>
-
-| input | monitor |
-| :---: | :---: |
-| <img alt="tui-test commands controlling a terminal session" src="static/tui-test-demo-controller.gif" width="420"> | <img alt="tui-test monitor showing the controlled terminal session" src="static/tui-test-demo-monitor.gif" width="420"> |
-
-### Diagnostics / trace viewer
-
-Add the following to `tui-test.toml` to retain failed traces, or use `mode = "on"` to retain every trace.
-
-```toml
-[trace]
-mode = "on-failure"
-directory = "./traces"
-```
-
-Users can open `trace.html` to review the trace or replay `session.cast`. Agents should read `trace.md` first and use `trace.json` and `timeline.json` for structured evidence instead of parsing the HTML.
-
-<p align="center">
-  <img alt="tui-test trace viewer showing a failed terminal assertion" src="static/trace-viewer.png">
-</p>
-
-### Configuration
-
-Create `tui-test.toml`:
-
-```toml
-[profiles.default]
-scrollback = 10000
-
-[profiles.default.colors]
-background = "#000000"
-foreground = "#c0c0c0"
-red = "#800000"
-
-[recording]
-directory = "./casts"
-
-[trace]
-mode = "on-failure"
-directory = "./traces"
-
-[diagnostics]
-screen-history-limit = 10
-```
-
-Set the appearance of screenshots and recordings with `[recording.style]`:
-
-```toml
-[recording.style]
-font_size = 18
-canvas_background = "#05050a"
-canvas_padding = 30
-
-[recording.style.window]
-background = "#15151f"
-foreground = "#c8c8e0"
-divider = "#2a2a3a"
-
-[recording.style.border]
-width = 1
-color = "#3a3a52"
-radius = 12
-
-[profiles.default.colors]
-background = "#0b0b12"
-foreground = "#d8d8e8"
-```
-
-<p align="center">
-  <img alt="tui-test drawn with a dark canvas, chrome and palette" src="static/style-midnight.svg" width="400">
-</p>
-
-Profiles override individual keys and inherit the rest from the file.
-Failure SVGs and HTML report SVGs use the session style.
-See the [style types and defaults](crates/tui-test/src/render/style.rs) for all options.
-The [CLI reference](references/cli.md#styling-screenshots-and-recordings) explains profile overrides.
-
-The CLI checks the current directory, the platform config directory, then `~/.tui-test`. Use `--config PATH` or `TUI_TEST_CONFIG` to select a file.
-
-### Shells and backends
-
-Shells: bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, and nushell.
-
-Backends: Alacritty, Ghostty, Rio, and xterm.js. Default: Alacritty.
-
-### Exit codes
-
-| Code | Meaning |
-| --- | --- |
-| `0` | Success |
-| `1` | Wait or assertion failed |
-| `2` | Invalid usage |
-| `3` | No session |
-| `4` | Daemon or IPC error |
-| `5` | Internal error |
-
-### Agent commands
-
-| Command | Description |
-| --- | --- |
-| `usage` | Print a short command guide. |
-| `agent-context` | Print the full command schema as JSON. |
-| `skill` | Print the complete agent guide. |
-| `skill --add` | Install the agent skill and local references. |
+Continue with [your first session](https://tui-test.dev/docs/getting-started/first-session/),
+[locators](https://tui-test.dev/docs/guides/locators/), or
+[configuration](https://tui-test.dev/docs/guides/configuration/).
+The docs also cover [recordings](https://tui-test.dev/docs/tools/recordings/),
+[tapes](https://tui-test.dev/docs/tools/tapes/),
+[trace reports](https://tui-test.dev/docs/tools/trace-viewer/), and
+[AI agent commands](https://tui-test.dev/docs/tools/ai-agents/).
 
 ## Contributing
 
-This project welcomes contributions and suggestions. Most contributions require you to agree to a Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us the rights to use your contribution. For details, visit https://cla.opensource.microsoft.com.
+See the [contributor guide](https://tui-test.dev/docs/contributing/) for builds,
+checks, binding generation, and documentation changes.
 
-When you submit a pull request, a CLA bot will automatically determine whether you need to provide a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions provided by the bot. You will only need to do this once across all repos using our CLA.
+Most contributions require a Contributor License Agreement (CLA) declaring that
+you have the right to grant us the rights to use your contribution.
+See https://cla.opensource.microsoft.com for details. The CLA bot will tell you
+whether an agreement is needed when you open a pull request. You only need to
+complete it once across repositories using our CLA.
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+This project follows the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
+See the [FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact
+[opencode@microsoft.com](mailto:opencode@microsoft.com) with questions.
+Use [GitHub Issues](https://github.com/microsoft/tui-test/issues) for bugs and
+feature requests, and [GitHub Discussions](https://github.com/microsoft/tui-test/discussions)
+for help. Report security vulnerabilities as described in [SECURITY.md](SECURITY.md).
 
 ## Trademarks
 
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft trademarks or logos is subject to and must follow [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general). Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship. Any use of third-party trademarks or logos are subject to those third-party's policies.
+This project may contain trademarks or logos for projects, products, or services.
+Authorized use of Microsoft trademarks or logos is subject to
+[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
+Use of Microsoft trademarks or logos in modified versions of this project must
+not cause confusion or imply Microsoft sponsorship.
+Third-party trademarks and logos are subject to their owners' policies.

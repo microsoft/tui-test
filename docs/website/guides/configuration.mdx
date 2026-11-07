@@ -1,0 +1,308 @@
+---
+title: Configuring sessions
+description: Configure terminal sessions with files, profiles, and API options.
+editUrl: false
+sidebar:
+  order: 8
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Create a configuration file
+
+Put `tui-test.toml` in the directory where you invoke the CLI:
+
+```toml
+[profiles.default]
+scrollback = 10000
+
+[profiles.default.colors]
+background = "#000000"
+foreground = "#c0c0c0"
+red = "#800000"
+
+[recording]
+directory = "./casts"
+
+[trace]
+mode = "on-failure"
+directory = "./traces"
+
+[diagnostics]
+screen-history-limit = 10
+```
+
+## Select a configuration file
+
+The CLI checks the current directory, the platform config directory, then
+`~/.tui-test`. `--config PATH` or `TUI_TEST_CONFIG` selects an explicit file.
+An explicitly selected file must exist.
+
+```sh
+tui-test open --config ./tui-test.toml
+```
+
+## Choose a profile
+
+```toml
+[profiles.ci]
+scrollback = 500
+
+[profiles.ci.timeouts]
+text = 10000
+command = 60000
+```
+
+```sh
+tui-test open --config ./tui-test.toml --profile ci
+```
+
+The CLI selects `default` when no profile is specified.
+An unknown named profile is an error.
+
+## Profile inheritance and overrides
+
+Profile recording settings inherit omitted keys from the file's `[recording]`
+table, including nested style fields. A profile can change only its font size
+without losing the file's canvas, padding, or window colors:
+
+```toml
+[recording.style]
+canvas_background = "#101014"
+canvas_padding = 32
+
+[profiles.docs.recording.style]
+font_size = 24
+```
+
+## Set launch options
+
+Select the shell, backend, size, working directory, and environment at launch:
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.open({
+      cols: 100,
+      rows: 40,
+      cwd: ".",
+      backend: "alacritty",
+      shell: "bash",
+    });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.open(cols=100, rows=40, cwd=".", backend="alacritty", shell="bash")
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::OpenOptions;
+
+    terminal.open(OpenOptions {
+        shell: Some(tui_test::shell::Shell::Bash),
+        cols: 100,
+        rows: 40,
+        cwd: Some(".".into()),
+        backend: tui_test::terminal::backend::Backend::Alacritty,
+        ..Default::default()
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if _, err := terminal.Open(tuitest.OpenOptions{Shell: tuitest.Bash, SpawnOptions: tuitest.SpawnOptions{Cols: tuitest.Ptr(uint16(100)), Rows: tuitest.Ptr(uint16(40)), Cwd: ".", Backend: tuitest.Alacritty}}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test open --shell bash --backend alacritty --cols 100 --rows 40 --cwd .
+    ```
+  </TabItem>
+</Tabs>
+
+Use `--restart` if the named session is already live and you want to replace it
+with these settings.
+
+## Set timeouts
+
+Profile timeouts use milliseconds. Per-launch timeout flags override the profile;
+individual operations can supply their own timeout.
+See the [timeout reference](/docs/reference/configuration/#timeouts) for classes
+and environment defaults.
+
+## Configure scrollback and colors
+
+`scrollback` sets retained history rows. Profile colors define the terminal's
+palette, separately from screenshot canvas and title-bar colors.
+See [terminal colors](/docs/reference/configuration/#terminal-colors).
+
+## Configure capture styles
+
+```toml
+[recording.style]
+font_size = 18
+canvas_background = "#05050a"
+canvas_padding = 30
+
+[recording.style.window]
+background = "#15151f"
+foreground = "#c8c8e0"
+divider = "#2a2a3a"
+
+[recording.style.border]
+width = 1
+color = "#3a3a52"
+radius = 12
+
+[profiles.default.colors]
+background = "#0b0b12"
+foreground = "#d8d8e8"
+```
+
+![A terminal capture with a dark canvas, title bar, and palette](https://raw.githubusercontent.com/microsoft/tui-test/main/static/style-midnight.svg)
+
+Failure SVGs and HTML report SVGs use the session's style too.
+See [recording style](/docs/reference/configuration/#recording-style) for
+fonts, padding, borders, and cursor animation.
+
+## Configure traces and diagnostics
+
+Trace mode is `off`, `on-failure`, or `on`. Configure it before opening the
+session. `recording.directory` and `trace.directory` are independent.
+Relative directories resolve beside the config file.
+
+`screen-history-limit` controls recent distinct screen retention for failures.
+It is separate from the terminal scrollback size.
+
+## Configure language APIs
+
+Pass profiles, timeouts, traces, and artifact options directly to the library
+client or test helper:
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    import { TuiTest } from "@microsoft/tui-test";
+
+    const terminal = new TuiTest("test", {
+      profile: {
+        scrollback: 500,
+        colors: { foreground: "#ffffff", background: "#000000" },
+      },
+      timeouts: { text: 10_000, command: 60_000 },
+      screenHistoryLimit: 10,
+      artifacts: {
+        dir: "artifacts/failures",
+        onFailure: "all",
+        includeRecording: true,
+      },
+      trace: { mode: "on-failure", directory: "artifacts/traces" },
+      recording: { directory: "artifacts/casts" },
+    });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    from tui_test import TuiTest
+
+    terminal = TuiTest("test",
+        profile={
+            "scrollback": 500,
+            "colors": {"foreground": "#ffffff", "background": "#000000"},
+        },
+        timeouts={"text": 10000, "command": 60000},
+        screen_history_limit=10,
+        artifacts={
+            "dir": "artifacts/failures",
+            "on_failure": "all",
+            "include_recording": True,
+        },
+        trace={"mode": "on-failure", "directory": "artifacts/traces"},
+        recording={"directory": "artifacts/casts"},
+    )
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::OpenOptions;
+
+    let terminal =
+        tui_test::Session::new("test").with_execution_context(tui_test::ExecutionContext {
+            artifact: Some(tui_test::FailureArtifactOptions {
+                directory: "artifacts/failures".into(),
+                mode: tui_test::FailureArtifactMode::All,
+                include_recording: true,
+            }),
+            trace: Some(tui_test::TraceOptions {
+                mode: tui_test::TraceMode::OnFailure,
+                directory: "artifacts/traces".into(),
+            }),
+            retention: tui_test::DiagnosticRetentionOptions {
+                screen_history_limit: 10,
+            },
+            ..Default::default()
+        });
+    terminal.open(tui_test::OpenOptions {
+        profile: tui_test::profile::Profile {
+            scrollback: 500,
+            colors: tui_test::profile::Colors {
+                foreground: tui_test::profile::Rgb::new(255, 255, 255),
+                background: tui_test::profile::Rgb::new(0, 0, 0),
+                ..Default::default()
+            },
+        },
+        timeouts: tui_test::Timeouts {
+            text: Some(10000),
+            command: Some(60000),
+            ..Default::default()
+        },
+        recording: tui_test::AutomaticRecording {
+            directory: Some("artifacts/casts".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    terminal, err := tuitest.New("test", tuitest.ClientOptions{
+        Profile: &tuitest.Profile{
+            Scrollback: tuitest.Ptr(uint32(500)),
+            Colors:     tuitest.Colors{Foreground: "#ffffff", Background: "#000000"},
+        },
+        Timeouts: tuitest.Timeouts{
+            Text:    tuitest.Ptr(10 * time.Second),
+            Command: tuitest.Ptr(60 * time.Second),
+        },
+        ScreenHistoryLimit: tuitest.Ptr(uint16(10)),
+        Artifacts: &tuitest.ArtifactOptions{
+            Dir: "artifacts/failures", OnFailure: tuitest.ArtifactAll, IncludeRecording: true,
+        },
+        Trace:     &tuitest.TraceOptions{Mode: tuitest.TraceOnFailure, Directory: "artifacts/traces"},
+        Recording: &tuitest.AutomaticRecording{Directory: "artifacts/casts"},
+    })
+    if err != nil {
+        t.Fatal(err)
+    }
+    t.Cleanup(func() { terminal.CloseQuiet() })
+    ```
+  </TabItem>
+</Tabs>
+
+Each [language reference](/docs/install/#libraries)
+lists its option types. Go uses pointer fields to distinguish omission from an
+explicit zero or false value.
