@@ -89,4 +89,3 @@ test("ConPTY rejects missing, truncated, mismatched-architecture, and mixed-vers
     assert.throws(() => prepareConptyAssets(bytes, pin), message);
   }
 });
-
