@@ -1,8 +1,10 @@
 # Bundled ConPTY
 
 These are the Microsoft-signed binaries from
-[`Microsoft.Windows.Console.ConPTY` 1.22.250204002](https://dev.azure.com/shine-oss/terminal/_artifacts/feed/TerminalDependencies/NuGet/Microsoft.Windows.Console.ConPTY/overview/1.22.250204002).
-Their Windows file version is `1.22.2502.4002`. The package supports Windows 10
+[`Microsoft.Windows.Console.ConPTY` 1.25.260303002-preview](https://www.nuget.org/packages/Microsoft.Windows.Console.ConPTY/1.25.260303002-preview).
+This is the 1.25.260303002 build used by
+[node-pty](https://github.com/microsoft/node-pty/tree/c11e72b7986df6062f938f43fc238591c47ed18b/third_party/conpty/1.25.260303002).
+The Windows file version is `1.25.2603.3002`. The package supports Windows 10
 build 17763 and later and uses the MIT license in [LICENSE](LICENSE).
 
 ## Why we bundle it
@@ -44,7 +46,10 @@ of the original binaries. Compression does not change their signatures.
 From the repository root, reproduce this bundle with:
 
 ```powershell
-python .github\scripts\vendor-conpty.py --version 1.22.250204002 --sha256 307c80b5fe6d4cf8d4ad300f88683725907c754f6fdb60652e311a141049b388
+Push-Location .github\scripts
+npm ci --ignore-scripts
+Pop-Location
+node .github\scripts\vendor-conpty.mjs --version 1.25.260303002-preview --sha256 7e477694e4095717c29725f7191ef13a5dda125e3a4d28a5fcc765a13dc9d967
 ```
 
 For an update, review the new package and checksum, run the script with the new
