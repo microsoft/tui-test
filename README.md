@@ -4,8 +4,7 @@ Control, inspect, test, and record real shell sessions and full-screen terminal
 apps on Windows, Linux, and macOS. Use the CLI or the in-process Rust, Python,
 JavaScript, and Go APIs for terminal automation, application tests, and AI agents.
 
-[Documentation](https://tui-test.dev/docs/getting-started/overview/) |
-[Installation](https://tui-test.dev/docs/install/) |
+[Documentation](https://tui-test.dev/docs/install/) |
 [Writing tests](https://tui-test.dev/docs/getting-started/writing-tests/) |
 [CLI reference](https://tui-test.dev/docs/reference/cli/)
 

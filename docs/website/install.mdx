@@ -10,8 +10,6 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 `tui-test` runs on Windows, Linux, and macOS. Install the CLI for terminal
 automation, or a library to use the engine from your code.
-See the [documentation overview](/docs/getting-started/overview/) for guides
-and references.
 
 ## CLI
 
@@ -106,16 +104,3 @@ Go, Python, and JavaScript use the same
 [native adapter](/docs/reference/native-library/) through PureGo, ctypes, and
 Koffi. Set `TUI_TEST_NATIVE_LIBRARY` to an absolute path to select a library
 from the same release or source revision.
-
-## Start a session
-
-```sh
-tui-test open
-tui-test submit "echo hello"
-tui-test wait command
-tui-test expect output "hello"
-tui-test close
-```
-
-Continue with [your first session](/docs/getting-started/first-session/) or
-[writing tests](/docs/getting-started/writing-tests/).
