@@ -63,21 +63,15 @@ const SKILL_REFERENCES: &[(&str, &str)] = &[
 ];
 
 fn main() {
-    let matches = Cli::command().get_matches_from(command_line_args());
+    let args = command_line_args();
+    let matches = match Cli::command().try_get_matches_from(&args) {
+        Ok(matches) => matches,
+        Err(error) if error.kind() == clap::error::ErrorKind::DisplayVersion => {
+            std::process::exit(print_versions(&args));
+        }
+        Err(error) => error.exit(),
+    };
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
-    if cli.version {
-        let code = match versions::render(cli.json) {
-            Ok(report) => {
-                println!("{report}");
-                0
-            }
-            Err(error) => {
-                eprintln!("failed to report versions: {error:#}");
-                5
-            }
-        };
-        std::process::exit(code);
-    }
     if let Some(Command::Tape(args)) = &cli.command {
         std::process::exit(tape::execute(args, cli.json, &matches));
     }
@@ -140,6 +134,36 @@ fn main() {
         command => run_remote(&session, command, cli.json, cli.verbose, execution_context),
     };
     std::process::exit(code);
+}
+
+fn print_versions(args: &[OsString]) -> i32 {
+    // Parse output options without validating commands that will not execute.
+    fn output_options(command: clap::Command) -> clap::Command {
+        command
+            .disable_help_flag(true)
+            .disable_help_subcommand(true)
+            .disable_version_flag(true)
+            .mut_subcommands(output_options)
+    }
+    let matches = output_options(Cli::command())
+        .arg(
+            clap::Arg::new("version")
+                .short('V')
+                .long("version")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .ignore_errors(true)
+        .get_matches_from(args);
+    match versions::render(matches.get_flag("json")) {
+        Ok(report) => {
+            println!("{report}");
+            0
+        }
+        Err(error) => {
+            eprintln!("failed to report versions: {error:#}");
+            5
+        }
+    }
 }
 
 fn command_line_args() -> Vec<OsString> {
@@ -1626,7 +1650,8 @@ TRACE     trace finish passed|failed (keep the session open)\n\
 TAPE      tape check FILE | tape run FILE (trusted scripts; isolated local session)\n\
 WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
-GLOBAL    -V/--version (all versions) | --session NAME | --json | --verbose | --failure-artifacts DIR\n\
+VERSION   -V/--version (all versions)\n\
+GLOBAL    --session NAME | --json | --verbose | --failure-artifacts DIR\n\
           [--failure-artifact-mode none|text|html|all]\n\
           [--failure-artifact-recording] [--diagnostic-context KEY=VALUE]\n\
           [--context-file PATH] [--operation-name NAME]\n\
@@ -2014,6 +2039,26 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn version_flags_remain_child_arguments_after_run_program() {
+        for flag in ["--version", "-V"] {
+            for arguments in [
+                vec!["tui-test", "run", "python", flag],
+                vec!["tui-test", "run", "--", "python", flag],
+                vec!["tui-test", "run", "python", "--", flag],
+                vec!["tui-test", "--", "python", flag],
+            ] {
+                let arguments = command_line_args_from(arguments.into_iter().map(OsString::from));
+                let cli = Cli::try_parse_from(arguments).unwrap();
+                let Some(Command::Run(RunArgs { program, args, .. })) = cli.command else {
+                    panic!("expected run");
+                };
+                assert_eq!(program, "python");
+                assert_eq!(args, [flag]);
+            }
+        }
     }
 
     fn unique_test_path(label: &str) -> std::path::PathBuf {

@@ -18,6 +18,24 @@ mod cli_config;
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 
 #[test]
+fn version_flags_short_circuit_incomplete_commands() {
+    let sandbox = Sandbox::new("version-short-circuit");
+    for flag in ["--version", "-V"] {
+        for command in [vec!["run"], vec!["tape", "run"]] {
+            let args = [vec![flag], command.clone()].concat();
+            assert!(sandbox.ok(&args).starts_with("tui-test "));
+            let args = [vec![flag, "--json"], command].concat();
+            let report: serde_json::Value = serde_json::from_str(&sandbox.ok(&args)).unwrap();
+            assert!(report["terminal_emulators"].is_object());
+        }
+        let report: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&[flag, "--json", "--help"])).unwrap();
+        assert!(report["terminal_emulators"].is_object());
+    }
+    assert!(std::fs::read_dir(&sandbox.home).unwrap().next().is_none());
+}
+
+#[test]
 fn version_flags_report_all_emulators_without_starting_a_daemon() {
     let sandbox = Sandbox::new("versions");
     let text = sandbox.ok(&["--version"]);

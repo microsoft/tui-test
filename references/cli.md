@@ -246,6 +246,7 @@ Most waits accept `--timeout MS`. `expect`, `click`, and `highlight` retry. `fin
 | `screenshot [PATH] [--background COLOR \| --transparent]` | Read text or save SVG or PNG. |
 
 `-V` and `--version` print the same complete report without a session or daemon.
+Use them before a subcommand. `run PROGRAM --version` passes the flag to the program.
 Rust package versions come from the build's
 resolved dependencies; Ghostty reports its native build version, and xterm.js
 reports the vendored headless and Unicode 11 addon versions. On Windows,
