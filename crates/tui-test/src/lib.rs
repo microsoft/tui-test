@@ -11,6 +11,7 @@ pub mod record;
 pub mod render;
 pub mod runtime;
 pub mod shell;
+pub mod tape;
 pub mod terminal;
 pub mod trace;
 

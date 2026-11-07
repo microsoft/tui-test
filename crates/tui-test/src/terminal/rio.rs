@@ -21,7 +21,8 @@ use crate::terminal::cell::{
     Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
 };
 use crate::terminal::emu::{
-    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode, TerminalMode,
+    Clipboard, ClipboardType, ClipboardValidator, CursorShape, CursorStyle, Emulator, KeyboardMode,
+    TerminalMode,
 };
 
 fn clipboard_type(clipboard: RioClipboardType) -> ClipboardType {
@@ -443,14 +444,18 @@ impl Emulator for RioEmu {
         (!self.term.title.is_empty()).then(|| self.term.title.clone())
     }
 
-    fn cursor_shape(&self) -> CursorShape {
+    fn cursor_style(&self) -> CursorStyle {
         // `Term::cursor()` masks the shape to `Hidden` whenever the cursor is
         // not drawn, including when scrolled out of view. Read the unmasked
         // shape so viewport movement does not change application cursor state.
-        match self.term.cursor_shape {
+        let shape = match self.term.cursor_shape {
             RioCursorShape::Underline => CursorShape::Underline,
             RioCursorShape::Beam => CursorShape::Bar,
             RioCursorShape::Block | RioCursorShape::Hidden => CursorShape::Block,
+        };
+        CursorStyle {
+            shape,
+            blinking: self.term.blinking_cursor,
         }
     }
 

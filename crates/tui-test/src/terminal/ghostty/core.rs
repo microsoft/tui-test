@@ -30,7 +30,7 @@ use crate::terminal::cell::{
     Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
 };
 use crate::terminal::emu::{
-    Clipboard, ClipboardType, ColorTable, CursorShape, KeyboardMode, TerminalMode,
+    Clipboard, ClipboardType, ColorTable, CursorShape, CursorStyle, KeyboardMode, TerminalMode,
 };
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
@@ -181,7 +181,7 @@ fn cell_from_grid(grid: &GridRef<'_>, links: &mut LinkCache) -> Result<EmuCell> 
 pub(super) struct Frame {
     pub(super) rows: Vec<Vec<EmuCell>>,
     pub(super) cursor: (u16, u16),
-    pub(super) cursor_shape: CursorShape,
+    pub(super) cursor_style: CursorStyle,
 }
 
 pub(super) struct GhosttyCore {
@@ -627,7 +627,10 @@ impl GhosttyCore {
         Ok(Frame {
             rows: output,
             cursor,
-            cursor_shape,
+            cursor_style: CursorStyle {
+                shape: cursor_shape,
+                blinking: snapshot.cursor_blinking().context("reading cursor blink")?,
+            },
         })
     }
 

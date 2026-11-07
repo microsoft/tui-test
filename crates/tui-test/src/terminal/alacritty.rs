@@ -27,7 +27,8 @@ use crate::terminal::cell::{
     Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
 };
 use crate::terminal::emu::{
-    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode, TerminalMode,
+    Clipboard, ClipboardType, ClipboardValidator, CursorShape, CursorStyle, Emulator, KeyboardMode,
+    TerminalMode,
 };
 
 fn clipboard_type(clipboard: AlacClipboardType) -> ClipboardType {
@@ -541,13 +542,18 @@ impl Emulator for AlacrittyEmu {
             && self.term.cursor_style().shape != AlacCursorShape::Hidden
     }
 
-    fn cursor_shape(&self) -> CursorShape {
-        match self.term.cursor_style().shape {
+    fn cursor_style(&self) -> CursorStyle {
+        let style = self.term.cursor_style();
+        let shape = match style.shape {
             AlacCursorShape::Underline => CursorShape::Underline,
             AlacCursorShape::Beam => CursorShape::Bar,
             // `HollowBlock` is what alacritty draws for an unfocused window,
             // which a headless terminal has no notion of.
             _ => CursorShape::Block,
+        };
+        CursorStyle {
+            shape,
+            blinking: style.blinking,
         }
     }
 

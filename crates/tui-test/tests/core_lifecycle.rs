@@ -46,6 +46,9 @@ fn child_fixture() {
                     emit(b"second-client-marker\r\n");
                 }
                 emit(b"command complete\r\n\x1b]133;D;0\x1b\\");
+                if line.trim() == "replayed-start" {
+                    emit(b"\x1b]133;C\x1b\\");
+                }
                 prompt();
             }
         }
@@ -661,6 +664,38 @@ fn wait_ready_does_not_reuse_a_prompt_while_submitted_input_is_pending() {
         })
         .unwrap();
     session.close().unwrap();
+}
+
+#[test]
+fn exit_code_survives_a_start_marker_during_prompt_redraw() {
+    let session = Session::new("exit-code-prompt-redraw");
+    let mut run = options("commands");
+    run.wait_ready = Some(true);
+    session.run(run).unwrap();
+    session
+        .execute(Operation::Submit {
+            data: Some("replayed-start".into()),
+        })
+        .unwrap();
+    wait_ready(&session, 5_000).unwrap();
+    session
+        .execute(Operation::WaitCommand {
+            timeout_ms: Some(0),
+        })
+        .unwrap();
+    let result = session.execute(Operation::ExpectExitCode {
+        code: 0,
+        timeout_ms: Some(0),
+    });
+    let exit_code = session.execute(Operation::GetExitCode).unwrap();
+    let OperationResult::State(state) = session.execute(Operation::State).unwrap() else {
+        panic!("expected terminal state");
+    };
+    session.close().unwrap();
+
+    result.unwrap();
+    assert!(matches!(exit_code, OperationResult::ExitCode(Some(0))));
+    assert_eq!(state.last_exit, Some(0));
 }
 
 #[test]

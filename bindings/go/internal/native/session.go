@@ -349,6 +349,14 @@ func (runtime *Session) StopRecording() (string, error) {
 	return runtime.textResult(func(session abiString, _ *nativeMemory) *abiResult { return nativeFunctions.StopRecording(session) })
 }
 
+func (runtime *Session) PauseRecording() error {
+	return runtime.unit(func(session abiString, _ *nativeMemory) *abiResult { return nativeFunctions.PauseRecording(session) })
+}
+
+func (runtime *Session) ResumeRecording() error {
+	return runtime.unit(func(session abiString, _ *nativeMemory) *abiResult { return nativeFunctions.ResumeRecording(session) })
+}
+
 func (runtime *Session) WaitIdle(timeout *time.Duration) error {
 	duration, err := nativeDuration(timeout)
 	if err != nil {

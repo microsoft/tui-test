@@ -2351,6 +2351,14 @@ fn dispatch(
             })?;
             Ok(OperationResult::Unit)
         }
+        Operation::PauseRecording => {
+            session.pause_recording()?;
+            Ok(OperationResult::Unit)
+        }
+        Operation::ResumeRecording => {
+            session.resume_recording()?;
+            Ok(OperationResult::Unit)
+        }
         Operation::StopRecording => Ok(OperationResult::Recording(session.stop_recording()?)),
         Operation::Open(_)
         | Operation::Run(_)
@@ -5030,8 +5038,8 @@ mod tests {
         fn title(&self) -> Option<String> {
             self.0.title()
         }
-        fn cursor_shape(&self) -> CursorShape {
-            self.0.cursor_shape()
+        fn cursor_style(&self) -> crate::terminal::emu::CursorStyle {
+            self.0.cursor_style()
         }
         fn viewable_rows(&self) -> Vec<Vec<EmuCell>> {
             panic!("injected trace capture failure")

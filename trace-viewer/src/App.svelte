@@ -17,6 +17,7 @@
 
   let { model, resources, hash = "" }: { model: TraceModel; resources: Resources; hash?: string } = $props();
   let view = $state.raw<ViewerState>(untrack(() => initialState(model, hash)));
+  let detailsHeight: number | undefined = $state();
   const selected = $derived(selection(model, view));
   const actions = $derived(visibleActions(model, view));
   const inspection = $derived(inspectCell(model, view));
@@ -53,7 +54,7 @@
   onframe={(index) => send({ type: "select-frame", index })}
   onimageerror={(index) => send({ type: "image-failed", index })} />
 
-<main>
+<main style:--details-height={detailsHeight === undefined ? undefined : `${detailsHeight}px`}>
   <SideNav active={view.sidebarTab} onselect={(tab) => send({ type: "select-tab", tab })}>
     {#snippet actionsPanel()}
       <ActionsTab {actions} selected={view.actionId} filter={view.filter} assertionsOnly={view.assertionsOnly}
@@ -80,7 +81,8 @@
     onmove={(dx, dy) => send({ type: "move-cell", dx, dy })}
     onimageerror={(index) => send({ type: "image-failed", index })} />
 
-  <BottomNav active={view.detailsTab} hasFailure={model.hasFailure} onselect={(tab) => send({ type: "select-tab", tab })}>
+  <BottomNav active={view.detailsTab} hasFailure={model.hasFailure} onselect={(tab) => send({ type: "select-tab", tab })}
+    onresize={(height) => { detailsHeight = height; }}>
     {#snippet resultPanel()}
       <ResultTab result={model.result} hasFailure={model.hasFailure} />
     {/snippet}
@@ -103,7 +105,8 @@
 </main>
 
 <style>
-  main { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(300px, 34vw, 620px) minmax(0, 1fr); grid-template-rows: minmax(180px, 1fr) 285px; }
-  @media (max-width: 850px) { main { grid-template-columns: 190px minmax(0, 1fr); } }
-  @media (max-width: 600px) { main { grid-template-columns: 150px minmax(0, 1fr); grid-template-rows: minmax(150px, 1fr) 260px; } }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(260px, 27vw, 420px) minmax(0, 1fr); grid-template-rows: minmax(220px, 1fr) var(--details-height, clamp(200px, 28vh, 300px)); border: 1px solid var(--border); border-top: 0; background: var(--bg); }
+  @media (max-width: 850px) { main { grid-template-columns: 180px minmax(0, 1fr); } }
+  @media (max-height: 650px) and (min-width: 601px) { main { flex: none; height: 600px; grid-template-rows: minmax(220px, 1fr) var(--details-height, 240px); } }
+  @media (max-width: 600px) { main { flex: none; height: 850px; grid-template-columns: minmax(0, 1fr); grid-template-rows: 160px minmax(260px, 1fr) var(--details-height, 260px); } }
 </style>

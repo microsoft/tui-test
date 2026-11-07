@@ -10,12 +10,13 @@ mod monitor;
 mod monitor_input;
 mod protocol;
 mod skill;
+mod tape;
 
 use std::ffi::OsString;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, FromArgMatches};
 
 use cli::{
     Cli, ClickCmd, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, HighlightCmd, KeyCmd, MatchArg,
@@ -53,10 +54,18 @@ const SKILL_REFERENCES: &[(&str, &str)] = &[
         "references/recipes.md",
         include_str!("../../../references/recipes.md"),
     ),
+    (
+        "references/tape.md",
+        include_str!("../../../references/tape.md"),
+    ),
 ];
 
 fn main() {
-    let cli = Cli::parse_from(command_line_args());
+    let matches = Cli::command().get_matches_from(command_line_args());
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    if let Some(Command::Tape(args)) = &cli.command {
+        std::process::exit(tape::execute(args, cli.json, &matches));
+    }
     let session = config::session_name_from_env(cli.session.clone());
     let execution_context = match build_execution_context(&cli) {
         Ok(context) => context,
@@ -415,6 +424,12 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         Command::Record {
             cmd: RecordCmd::Stop,
         } => Request::StopRecording,
+        Command::Record {
+            cmd: RecordCmd::Pause,
+        } => Request::PauseRecording,
+        Command::Record {
+            cmd: RecordCmd::Resume,
+        } => Request::ResumeRecording,
         Command::Cells { x, y, w, h } => Request::Cells { x, y, w, h },
         Command::Get { field } => Request::Get {
             field: map_field(field),
@@ -1482,6 +1497,7 @@ DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           [--background COLOR | --transparent]\n\
           record stop | get-recording [session] > out.cast (when tracing is enabled)\n\
+TAPE      tape check FILE | tape run FILE (trusted scripts; isolated local session)\n\
 WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
 GLOBAL    --session NAME | --json | --verbose | --failure-artifacts DIR\n\
@@ -1503,6 +1519,7 @@ fn exit_code(resp: &Response) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use serde_json::json;
     use std::cell::RefCell;
 
@@ -1530,6 +1547,21 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("require --out"));
+    }
+
+    #[test]
+    fn recording_controls_map_to_protocol_requests() {
+        for (command, kind) in [("pause", "pause_recording"), ("resume", "resume_recording")] {
+            let cli = Cli::try_parse_from(["tui-test", "record", command]).unwrap();
+            let request = build_request(cli.command.unwrap()).unwrap();
+            let json = serde_json::to_value(&request).unwrap();
+            assert_eq!(json, serde_json::json!({ "kind": kind }));
+            let decoded: Request = serde_json::from_value(json).unwrap();
+            assert!(matches!(
+                (command, decoded),
+                ("pause", Request::PauseRecording) | ("resume", Request::ResumeRecording)
+            ));
+        }
     }
 
     #[test]

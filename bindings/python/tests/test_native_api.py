@@ -295,6 +295,8 @@ class NativeStubTests(unittest.TestCase):
             stub,
         )
         self.assertIn("typing.Awaitable[", stub)
+        for method in ("pause_recording", "resume_recording"):
+            self.assertIn(f"def {method}(self) -> typing.Awaitable[None]: ...", stub)
 
     def test_spawn_results_use_the_public_open_result_type(self):
         stub = (

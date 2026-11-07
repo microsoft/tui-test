@@ -285,6 +285,8 @@ func (client *Client) StartRecording(path string, options RecordingOptions) erro
 	return client.runtime.startRecording(path, options)
 }
 func (client *Client) StopRecording() (string, error) { return client.runtime.stopRecording() }
+func (client *Client) PauseRecording() error          { return client.runtime.pauseRecording() }
+func (client *Client) ResumeRecording() error         { return client.runtime.resumeRecording() }
 
 func (client *Client) guard(operation string, err error) error {
 	var failure *Error

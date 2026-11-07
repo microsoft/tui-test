@@ -21,6 +21,29 @@ Use `--session NAME` to select a session. `open` and `run` reuse it unless `--re
 
 `restart` replays the last successful spawn, preserving its original working directory, options, and latest terminal size. It sends Ctrl-C and waits up to 5000 ms before forcing replacement; `--graceful-timeout 0` skips the wait. It works after child exit, but not after `close` or daemon shutdown. The terminal and automatic recording start fresh.
 
+## Tape to GIF
+
+```sh
+tui-test tape check demo.tape --json
+tui-test tape run demo.tape
+```
+
+`check` loads all sources, compiles the complete tape, and checks execution requirements without a child or output writes.
+`run` repeats those checks, executes the tape, exports one GIF, and closes its isolated local session.
+Both commands report terminal columns and rows, actual pixel dimensions, and source-located warnings.
+Relative tape, `Source`, and output paths use the invocation directory, not the tape directory.
+
+Tape commands do not use a daemon, project configuration, or `TUI_TEST_SESSION`.
+They reject `--session`, `--verbose`, `--failure-artifacts`, `--failure-artifact-mode`, `--failure-artifact-recording`, and `--diagnostic-context`.
+The core tape API does not accept a session execution context or produce the CLI failure bundles.
+Use ordinary session commands when you need those diagnostics.
+`--json` returns `{"ok":true,"data":{...}}` or `{"ok":false,"error":{...}}` on stdout, without diagnostic text on stderr.
+Syntax, unsupported features, and preflight failures return exit code 2.
+Execution failures use the core error exit code.
+
+Warning: Run only trusted tapes. Tapes can execute shell commands; they are not sandboxed.
+See [Tape](tape.md) for a runnable example, supported commands, and exact result fields.
+
 ## Locate text
 
 ```sh
@@ -142,19 +165,37 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 | --- | --- |
 | `record start PATH [--background COLOR \| --transparent]` | Start a recording. |
 | `record stop` | Finish it. |
+| `record pause` | Pause APNG, GIF, or MP4 capture while the terminal continues. |
+| `record resume` | Resume raster capture from the live terminal without paused time. |
 | `get-recording [SESSION]` | Read the automatic asciinema recording. |
 | `monitor` | Watch a session live. |
 | `monitor --interactive` | Forward keyboard, paste, and supported SGR mouse input; Ctrl+] detaches. |
 
 Interactive monitors mirror the session's keyboard, paste, and mouse modes.
 
-APNG, GIF, and MP4 recordings capture frames from the session's live emulator.
-Exports encode these frames without replay through another emulator. Cast files
-retain terminal output and resize events; the external player selects its own
-emulator.
+APNG, GIF, and MP4 recordings sample the session's live emulator at `--fps` (default: 30).
+GIF export rejects timelines above 100,000 encoded frames, including repeated frames for long holds.
+The check occurs before image encoding; a failed export retains its recovery cast.
+Output, resize, and viewport changes appear in the next sample.
+A state shorter than one sample interval can be missed.
+Exports encode these samples without replay through another emulator.
 
-Recordings retain frames in memory until export. They merge identical states and
-apply the configured frame rate.
+Raster recordings preserve active elapsed time until `record stop`, including quiet periods.
+Pause and resume support APNG, GIF, and MP4 only. Asciicast requests return usage errors without changing the recording.
+The terminal continues during a pause. Resume captures its current screen, not the intermediate output.
+Stop also works during a pause. Automatic diagnostic recordings and recovery casts remain continuous, including output during pauses.
+Pause requires an active recording. Resume requires a paused recording.
+There is no default idle cap or extra final hold.
+`--speed` scales playback time; `--idle-time-limit` explicitly caps each unchanged visual interval before speed scaling.
+Cursor blink phases share that interval's idle limit; they do not count as terminal activity.
+An idle limit of zero removes those intervals.
+Media formats round durations to their supported precision.
+Recordings retain frames in memory until export and merge identical samples.
+
+Cast files retain timestamped terminal output and resize events.
+FPS sampling does not change this stream or add viewport movements.
+The external player selects its own emulator.
+The cast does not explicitly represent quiet time after its last event.
 
 This Unix example starts recording inside an alternate screen. The exported
 animation preserves the primary screen when the program returns to it.
@@ -260,7 +301,23 @@ enabled = true
 color = "#080812"
 offset = 5
 spread = 7
+
+[recording.style.cursor]
+blink = true
+blink_interval_ms = 500
 ```
+
+`cursor.blink` allows animation when the application's effective cursor style requests blinking.
+Set it to `false` for a steady cursor.
+`cursor.blink_interval_ms` must be a positive integer.
+It sets each visible or hidden phase before playback speed scaling; 500 means a one-second cycle.
+Low recording FPS can miss short phases.
+
+Animation starts visible and resets when a sample detects a change in cursor position, style, or visibility.
+Hidden and off-screen cursors stay hidden.
+Screenshots always use the visible phase of an otherwise-visible cursor.
+These settings do not change cursor inspection, waits, or asciicast output.
+Profiles inherit and override these fields like other style settings.
 
 There are two gaps, and each side of either can differ. A table sets the sides
 individually, and a side it does not name keeps its own default, so widening

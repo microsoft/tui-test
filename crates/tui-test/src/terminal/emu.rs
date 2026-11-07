@@ -17,15 +17,20 @@ use crate::terminal::cell::{Color, EmuCell};
 
 /// The shape a terminal draws its cursor as, set with `DECSCUSR` (`CSI Ps SP q`).
 ///
-/// The specification defines three, each in a blinking and a steady form. The
-/// blink is not represented: a screenshot is a single moment, and a blinking
-/// cursor is drawn in the half of that cycle where it is visible.
+/// Each shape has a blinking and a steady form, represented by [`CursorStyle`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CursorShape {
     #[default]
     Block,
     Underline,
     Bar,
+}
+
+/// Effective application cursor style, independent of visibility and animation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CursorStyle {
+    pub shape: CursorShape,
+    pub blinking: bool,
 }
 
 impl CursorShape {
@@ -534,7 +539,12 @@ pub trait Emulator: Send {
     }
 
     /// The shape the cursor is currently drawn as.
-    fn cursor_shape(&self) -> CursorShape;
+    fn cursor_shape(&self) -> CursorShape {
+        self.cursor_style().shape
+    }
+
+    /// Native effective shape and blink setting, without a presentation phase.
+    fn cursor_style(&self) -> CursorStyle;
 
     /// Visible screen as rows of cells. Always `rows` entries of `cols` cells.
     fn viewable_rows(&self) -> Vec<Vec<EmuCell>>;

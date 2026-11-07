@@ -188,7 +188,10 @@ fn mp4_timeline(frames: &[Frame], fps: u8) -> anyhow::Result<Vec<Mp4Step>> {
         let scaled = elapsed
             .checked_mul(u128::from(fps))
             .ok_or_else(|| anyhow::anyhow!("MP4 recording timeline is too long"))?;
-        let rounded = scaled.saturating_add(500_000_000) / 1_000_000_000;
+        let rounded = scaled
+            .checked_add(500_000_000)
+            .ok_or_else(|| anyhow::anyhow!("MP4 recording timeline is too long"))?
+            / 1_000_000_000;
         if rounded <= emitted {
             continue;
         }
@@ -201,6 +204,7 @@ fn mp4_timeline(frames: &[Frame], fps: u8) -> anyhow::Result<Vec<Mp4Step>> {
         emitted = rounded;
     }
     if output.is_empty() {
+        // MP4 requires at least one frame, even for a zero-length recording.
         output.push(Mp4Step {
             frame: frames.len().saturating_sub(1),
             repeats: 1,
@@ -244,13 +248,14 @@ fn encode_gif(
     frames: &[Frame],
     renderer: &mut dyn FrameRenderer,
 ) -> anyhow::Result<()> {
+    let timeline = gif_timeline(frames)?;
     let (width, height) = renderer.pixel_size();
     let width: u16 = width.try_into()?;
     let height: u16 = height.try_into()?;
     let output = BufWriter::new(File::create(path)?);
     let mut encoder = gif::Encoder::new(output, width, height, &[])?;
     encoder.set_repeat(gif::Repeat::Infinite)?;
-    for step in gif_timeline(frames) {
+    for step in timeline {
         let mut pixels = renderer.render(&frames[step.frame])?.into_raw();
         let mut frame = gif::Frame::from_rgba_speed(width, height, &mut pixels, 10);
         frame.delay = step.delay;
@@ -266,25 +271,63 @@ fn encode_apng(
     frames: &[Frame],
     renderer: &mut dyn FrameRenderer,
 ) -> anyhow::Result<()> {
+    let frame_count = apng_frame_count(frames)?;
     let (width, height) = renderer.pixel_size();
     let output = BufWriter::new(File::create(path)?);
     let mut encoder = png::Encoder::new(output, width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_animated(frames.len().try_into()?, 0)?;
+    encoder.set_animated(frame_count, 0)?;
     encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
     let mut writer = encoder.write_header()?;
-    for frame in frames {
+    for frame in apng_frames(frames) {
         let image = renderer.render(frame)?;
-        let (delay_num, delay_den) = apng_delay(frame.duration);
-        writer.set_frame_delay(delay_num, delay_den)?;
-        writer.write_image_data(image.as_raw())?;
+        let mut remaining = frame.duration;
+        loop {
+            let duration = remaining.min(APNG_MAX_DELAY);
+            let (delay_num, delay_den) = apng_delay(duration);
+            writer.set_frame_delay(delay_num, delay_den)?;
+            writer.write_image_data(image.as_raw())?;
+            remaining -= duration;
+            if remaining.is_zero() {
+                break;
+            }
+        }
     }
     writer.finish()?;
     Ok(())
 }
 
+const APNG_MAX_DELAY: Duration = Duration::from_secs(u16::MAX as u64);
+
+fn apng_frames(frames: &[Frame]) -> impl Iterator<Item = &Frame> {
+    // Only an entirely zero-length recording needs a minimum-duration final state.
+    let fallback = frames
+        .last()
+        .filter(|_| frames.iter().all(|frame| frame.duration.is_zero()));
+    frames
+        .iter()
+        .filter(|frame| !frame.duration.is_zero())
+        .chain(fallback)
+}
+
+fn apng_frame_count(frames: &[Frame]) -> anyhow::Result<u32> {
+    apng_frames(frames).try_fold(0u32, |total, frame| {
+        let count = frame
+            .duration
+            .as_nanos()
+            .div_ceil(APNG_MAX_DELAY.as_nanos())
+            .max(1);
+        let count = u32::try_from(count)
+            .map_err(|_| anyhow::anyhow!("APNG recording has too many frames"))?;
+        total
+            .checked_add(count)
+            .ok_or_else(|| anyhow::anyhow!("APNG recording has too many frames"))
+    })
+}
+
 fn apng_delay(duration: Duration) -> (u16, u16) {
+    // APNG uses a positive minimum of 1/65535 second, including zero-length recordings.
     let seconds = duration.as_secs_f64();
     if seconds <= 0.0 {
         return (1, u16::MAX);
@@ -304,19 +347,33 @@ struct GifStep {
     delay: u16,
 }
 
-fn gif_timeline(frames: &[Frame]) -> Vec<GifStep> {
-    const TICK_NANOS: u128 = 10_000_000;
+const MAX_GIF_FRAMES: usize = 100_000;
+const GIF_TICK_NANOS: u128 = 10_000_000;
 
+fn check_gif_frame_count(count: u128) -> anyhow::Result<()> {
+    if count > MAX_GIF_FRAMES as u128 {
+        anyhow::bail!("GIF frame limit of {MAX_GIF_FRAMES} would be exceeded ({count} frames)");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_gif_duration(duration: Duration) -> anyhow::Result<()> {
+    let ticks = (duration.as_nanos() + GIF_TICK_NANOS / 2) / GIF_TICK_NANOS;
+    check_gif_frame_count(ticks.div_ceil(u128::from(u16::MAX)).max(1))
+}
+
+fn gif_timeline(frames: &[Frame]) -> anyhow::Result<Vec<GifStep>> {
     let mut output: Vec<GifStep> = Vec::new();
     let mut elapsed = 0u128;
     let mut emitted = 0u128;
     for (index, frame) in frames.iter().enumerate() {
         elapsed = elapsed.saturating_add(frame.duration.as_nanos());
-        let rounded = elapsed.saturating_add(TICK_NANOS / 2) / TICK_NANOS;
+        let rounded = elapsed.saturating_add(GIF_TICK_NANOS / 2) / GIF_TICK_NANOS;
         if rounded <= emitted {
             continue;
         }
         let mut delay = rounded - emitted;
+        check_gif_frame_count(output.len() as u128 + delay.div_ceil(u128::from(u16::MAX)))?;
         while delay > 0 {
             let chunk = delay.min(u128::from(u16::MAX)) as u16;
             output.push(GifStep {
@@ -328,6 +385,7 @@ fn gif_timeline(frames: &[Frame]) -> Vec<GifStep> {
         emitted = rounded;
     }
     if output.is_empty() {
+        // GIF uses a positive minimum of one centisecond.
         output.push(GifStep {
             frame: frames.len().saturating_sub(1),
             delay: 1,
@@ -339,6 +397,7 @@ fn gif_timeline(frames: &[Frame]) -> Vec<GifStep> {
         let last_frame = frames.len() - 1;
         if let Some(previous) = output.iter_mut().rev().find(|step| step.delay > 1) {
             previous.delay -= 1;
+            check_gif_frame_count(output.len() as u128 + 1)?;
             output.push(GifStep {
                 frame: last_frame,
                 delay: 1,
@@ -347,7 +406,7 @@ fn gif_timeline(frames: &[Frame]) -> Vec<GifStep> {
             previous.frame = last_frame;
         }
     }
-    output
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -377,11 +436,121 @@ mod tests {
     }
 
     #[test]
+    fn apng_splits_long_holds_without_shortening_them() {
+        let path = temp_path("png");
+        let duration = APNG_MAX_DELAY * 2 + Duration::from_millis(250);
+        let frames = [frame(Color::Rgb(1, 2, 3), duration)];
+        let mut renderer = GridRenderer::new(1, 1);
+        encode_apng(&path, &frames, &mut renderer).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let chunks = png_chunks(&bytes);
+        assert_eq!(png_animation_frames(&chunks), 3);
+        assert!(png_total_delay(&chunks).abs_diff(duration) < Duration::from_micros(100));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn apng_rejects_unrepresentable_frame_counts() {
+        let frames = [frame(Color::Rgb(1, 2, 3), Duration::MAX)];
+        assert!(apng_frame_count(&frames).is_err());
+    }
+
+    struct TrackedRenderer {
+        renderer: GridRenderer,
+        rendered: Vec<Frame>,
+    }
+
+    impl FrameRenderer for TrackedRenderer {
+        fn pixel_size(&self) -> (u32, u32) {
+            self.renderer.pixel_size()
+        }
+
+        fn render(&mut self, frame: &Frame) -> anyhow::Result<crate::render::raster::RgbaFrame> {
+            self.rendered.push(frame.clone());
+            self.renderer.render(frame)
+        }
+    }
+
+    #[test]
+    fn apng_zero_duration_states_use_only_the_final_state() {
+        let path = temp_path("png");
+        let frames = [1, 2, 3].map(|red| frame(Color::Rgb(red, 0, 0), Duration::ZERO));
+        let mut renderer = TrackedRenderer {
+            renderer: GridRenderer::new(1, 1),
+            rendered: Vec::new(),
+        };
+        encode_apng(&path, &frames, &mut renderer).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let chunks = png_chunks(&bytes);
+        assert_eq!(png_animation_frames(&chunks), 1);
+        assert_eq!(chunks.iter().filter(|(kind, _)| kind == b"fcTL").count(), 1);
+        assert_eq!(renderer.rendered, vec![frames[2].clone()]);
+        assert_eq!(
+            png_total_delay(&chunks),
+            Duration::from_secs_f64(1.0 / f64::from(u16::MAX))
+        );
+    }
+
+    #[test]
+    fn apng_omits_zero_duration_states_including_the_final_state_when_positive_states_exist() {
+        let path = temp_path("png");
+        let frames = [
+            Duration::ZERO,
+            APNG_MAX_DELAY + Duration::from_millis(250),
+            Duration::ZERO,
+            Duration::from_millis(100),
+            Duration::ZERO,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(red, duration)| frame(Color::Rgb(red as u8, 0, 0), duration))
+        .collect::<Vec<_>>();
+        let mut renderer = TrackedRenderer {
+            renderer: GridRenderer::new(1, 1),
+            rendered: Vec::new(),
+        };
+        encode_apng(&path, &frames, &mut renderer).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let chunks = png_chunks(&bytes);
+        assert_eq!(png_animation_frames(&chunks), 3);
+        assert_eq!(chunks.iter().filter(|(kind, _)| kind == b"fcTL").count(), 3);
+        assert_eq!(
+            renderer.rendered,
+            vec![frames[1].clone(), frames[3].clone()]
+        );
+        assert!(
+            png_total_delay(&chunks).abs_diff(APNG_MAX_DELAY + Duration::from_millis(350))
+                < Duration::from_micros(100)
+        );
+    }
+
+    #[test]
+    fn zero_and_short_recordings_use_explicit_format_minimums() {
+        for duration in [Duration::ZERO, Duration::from_nanos(1)] {
+            let frames = [frame(Color::Rgb(1, 2, 3), duration)];
+            assert_eq!(apng_delay(duration), (1, u16::MAX));
+            assert_eq!(
+                gif_timeline(&frames).unwrap(),
+                vec![GifStep { frame: 0, delay: 1 }]
+            );
+            assert_eq!(
+                mp4_timeline(&frames, 30).unwrap(),
+                vec![Mp4Step {
+                    frame: 0,
+                    repeats: 1
+                }]
+            );
+        }
+    }
+
+    #[test]
     fn gif_timing_diffuses_thirty_fps_rounding_error() {
         let frames = (0..30)
             .map(|_| frame(Color::Rgb(1, 2, 3), Duration::from_secs_f64(1.0 / 30.0)))
             .collect::<Vec<_>>();
-        let timeline = gif_timeline(&frames);
+        let timeline = gif_timeline(&frames).unwrap();
         assert!(timeline.iter().all(|step| step.delay > 0));
         assert_eq!(
             timeline
@@ -394,11 +563,41 @@ mod tests {
     }
 
     #[test]
+    fn gif_expansion_limit_preserves_existing_output() {
+        let path = temp_path("gif");
+        std::fs::write(&path, b"existing output").unwrap();
+        let duration =
+            Duration::from_millis(u64::from(u16::MAX) * 10 * (MAX_GIF_FRAMES as u64 + 1));
+        assert!(validate_gif_duration(duration).is_err());
+        let frames = [frame(Color::Rgb(1, 2, 3), duration)];
+        let mut renderer = GridRenderer::new(1, 1);
+        let error = encode_gif(&path, &frames, &mut renderer).unwrap_err();
+        assert!(error.to_string().contains("GIF frame limit"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing output");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn gif_frame_limit_includes_fragmented_holds_and_final_state() {
+        let duration = Duration::from_millis(u64::from(u16::MAX) * 10);
+        let frames = [
+            frame(Color::Rgb(1, 2, 3), duration * (MAX_GIF_FRAMES as u32 - 1)),
+            frame(Color::Rgb(4, 5, 6), duration),
+        ];
+        assert_eq!(gif_timeline(&frames).unwrap().len(), MAX_GIF_FRAMES);
+        let mut frames = frames.to_vec();
+        frames.push(frame(Color::Rgb(7, 8, 9), Duration::from_millis(1)));
+        assert!(gif_timeline(&frames).is_err());
+        frames[2].duration = Duration::from_millis(10);
+        assert!(gif_timeline(&frames).is_err());
+    }
+
+    #[test]
     fn sub_centisecond_frames_are_coalesced_without_zero_delays() {
         let frames = (0..4)
             .map(|index| frame(Color::Rgb(index, 0, 0), Duration::from_millis(4)))
             .collect::<Vec<_>>();
-        let timeline = gif_timeline(&frames);
+        let timeline = gif_timeline(&frames).unwrap();
         assert!(timeline.iter().all(|step| step.delay > 0));
         assert_eq!(timeline.last().unwrap().frame, frames.len() - 1);
     }
@@ -414,7 +613,7 @@ mod tests {
         .map(|(red, duration)| frame(Color::Rgb(red, 0, 0), duration))
         .collect::<Vec<_>>();
         assert_eq!(
-            gif_timeline(&frames),
+            gif_timeline(&frames).unwrap(),
             vec![
                 GifStep {
                     frame: 0,
@@ -438,7 +637,7 @@ mod tests {
         .map(|(red, duration)| frame(Color::Rgb(red, 0, 0), duration))
         .collect::<Vec<_>>();
         assert_eq!(
-            gif_timeline(&frames),
+            gif_timeline(&frames).unwrap(),
             vec![
                 GifStep { frame: 0, delay: 9 },
                 GifStep { frame: 1, delay: 1 }

@@ -171,7 +171,7 @@ Use `go doc github.com/microsoft/tui-test/bindings/go` for exported type fields 
 | Terminal state | `GetCursor`, `GetSize`, `GetTitle`, `GetClipboard`, `GetBellCount`, `GetBellEvents` |
 | Waits | `WaitTitle`, `WaitClipboard`, `WaitIdle`, `WaitCommand`, `WaitExit`, `WaitReady`, `WaitBell` |
 | Assertions | `ExpectTitle`, `ExpectExitCode`, `ExpectOutput`, `ExpectBellCount`, `ExpectSnapshot` |
-| Capture | `Screenshot`, `StartRecording`, `StopRecording` |
+| Capture | `Screenshot`, `StartRecording`, `PauseRecording`, `ResumeRecording`, `StopRecording` |
 
 Use `WaitCommand` after submitting a shell command, and `WaitExit` after running a program directly. `WaitIdle` only establishes that the screen stopped changing.
 
@@ -253,6 +253,16 @@ Trace and failure-artifact directories can contain terminal output, titles, loca
 `Screenshot` returns terminal text when its path is empty, or writes SVG or PNG when a path is supplied. `ScreenshotOptions` controls scrollback, zoom, background color, and transparency. Background color and transparency are mutually exclusive, and canvas options require an output path.
 
 `StartRecording` supports asciinema, APNG, GIF, and MP4. File extensions select the format unless `RecordingOptions.Format` overrides it. Recording options control FPS, speed, idle-time limit, zoom, background color, and transparency. Background color and transparency are mutually exclusive. MP4 requires `ffmpeg` on the executable search path and does not support transparency. `StopRecording` finishes the recording and returns its path.
+
+`PauseRecording` excludes subsequent time while the terminal continues. `ResumeRecording` captures the current screen, not intermediate paused output.
+These controls support APNG, GIF, and MP4 only. Asciicast requests return usage errors without changing the recording.
+Automatic diagnostic recordings and recovery casts remain continuous, including output during pauses.
+`StopRecording` also works during a pause. Repeated pause or resume calls return usage errors.
+
+Raster recording samples the live terminal at `FPS` (default: 30) and preserves elapsed time until stop.
+There is no default idle cap or extra final hold.
+Set `IdleTimeLimit` to cap unchanged visual intervals before `Speed` scales playback time.
+Asciicast remains a timestamped output stream; FPS sampling does not change it.
 
 `ExpectSnapshot` returns `SnapshotPassed`, `SnapshotWritten`, or `SnapshotUpdated`. Set `SnapshotOptions.Update` only when you intend to update the baseline. Snapshot options also control style and title inclusion and the snapshot working directory.
 

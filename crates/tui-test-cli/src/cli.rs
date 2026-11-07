@@ -219,8 +219,31 @@ pub struct ScreenshotArgs {
     pub transparent: bool,
 }
 
+#[derive(Args)]
+pub struct TapeArgs {
+    #[command(subcommand)]
+    pub command: TapeCommand,
+}
+
+#[derive(Subcommand)]
+pub enum TapeCommand {
+    /// Validate the complete tape without a child or output writes.
+    Check(TapeFileArgs),
+    /// Execute a trusted tape and export one GIF.
+    Run(TapeFileArgs),
+}
+
+#[derive(Args)]
+pub struct TapeFileArgs {
+    /// Tape path, relative to the invocation directory.
+    #[arg(value_name = "FILE")]
+    pub file: std::path::PathBuf,
+}
+
 #[derive(Subcommand)]
 pub enum Command {
+    /// Check or run a trusted tape in an isolated local session.
+    Tape(TapeArgs),
     /// Spawn a shell session (auto-starts the daemon).
     Open {
         /// Shell to launch (defaults to the platform shell).
@@ -475,13 +498,13 @@ pub enum RecordCmd {
         /// Override the format inferred from the output extension.
         #[arg(long, value_enum)]
         format: Option<RecordingFormatArg>,
-        /// Maximum animation frame rate.
+        /// Sample the live terminal at this many frames per second (default: 30).
         #[arg(long)]
         fps: Option<u8>,
         /// Playback speed multiplier.
         #[arg(long)]
         speed: Option<f64>,
-        /// Clamp idle gaps to this many seconds.
+        /// Cap unchanged visual intervals in seconds (uncapped by default).
         #[arg(long)]
         idle_time_limit: Option<f64>,
         /// Scale image/video dimensions while keeping the same terminal cells.
@@ -496,6 +519,10 @@ pub enum RecordCmd {
     },
     /// Stop the active recording and finish its output file.
     Stop,
+    /// Pause APNG, GIF, or MP4 recording while the terminal continues.
+    Pause,
+    /// Resume APNG, GIF, or MP4 recording without including paused time.
+    Resume,
 }
 
 /// Signals deliverable to a session's child process.

@@ -58,6 +58,8 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("screenshot", "Screenshot", "Screenshot"),
     ("startRecording", "StartRecording", "Unit"),
     ("stopRecording", "StopRecording", "Recording"),
+    ("pauseRecording", "PauseRecording", "Unit"),
+    ("resumeRecording", "ResumeRecording", "Unit"),
 ];
 
 const INPUTS: &[(&str, &str)] = &[

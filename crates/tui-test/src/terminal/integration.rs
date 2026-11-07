@@ -76,7 +76,7 @@ impl CommandTracker {
         self.state.finished_count
     }
 
-    /// The last reported command status, cleared when a new command starts.
+    /// The last reported command status, retained until the next finish marker.
     pub fn last_exit(&self) -> Option<i32> {
         self.state.last_exit
     }
@@ -110,7 +110,6 @@ impl TrackerState {
             }
             "C" => {
                 self.prompt_active = false;
-                self.last_exit = None;
                 let cmd = clean(&self.command_buf);
                 let cmd = cmd.strip_prefix("> ").unwrap_or(&cmd).to_string();
                 self.last_command = Some(cmd);
@@ -262,18 +261,43 @@ mod tests {
     }
 
     #[test]
-    fn a_new_command_invalidates_the_previous_exit_code() {
+    fn a_new_command_preserves_the_last_reported_exit_code_until_completion() {
         let mut tracker = CommandTracker::new();
         for marker in ["B", "C", "D;0", "A", "B"] {
             tracker.feed(&osc(marker));
         }
         assert_eq!(tracker.last_exit(), Some(0));
         tracker.feed(&osc("C"));
-        assert_eq!(tracker.last_exit(), None);
+        assert!(tracker.executing());
+        assert_eq!(tracker.last_exit(), Some(0));
         tracker.feed(&osc("A"));
-        assert_eq!(tracker.last_exit(), None);
+        assert_eq!(tracker.last_exit(), Some(0));
         tracker.feed(&osc("D;7"));
         assert_eq!(tracker.last_exit(), Some(7));
+        tracker.feed(&osc("C"));
+        tracker.feed(&osc("D"));
+        assert_eq!(tracker.last_exit(), None);
+    }
+
+    #[test]
+    fn a_start_marker_during_prompt_redraw_preserves_the_completed_exit_code() {
+        for marker in [osc, osc633] {
+            let mut tracker = CommandTracker::new();
+            for value in ["C", "A", "B"] {
+                tracker.feed(&marker(value));
+            }
+            tracker.feed(b"echo settled");
+            tracker.feed(&marker("C"));
+            tracker.feed(b"settled\r\n");
+            tracker.feed(&marker("D;7"));
+            for value in ["C", "A", "B"] {
+                tracker.feed(&marker(value));
+            }
+            assert!(tracker.is_ready());
+            assert!(!tracker.executing());
+            assert_eq!(tracker.last_exit(), Some(7));
+            assert_eq!(tracker.last_output(), Some("settled"));
+        }
     }
 
     #[test]

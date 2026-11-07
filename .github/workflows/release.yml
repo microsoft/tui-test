@@ -110,7 +110,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         if: contains(matrix.target, 'musl')
         with:
           tool: cargo-zigbuild
@@ -196,7 +196,7 @@ jobs:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
 
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         if: matrix.zigbuild && !endsWith(matrix.target, '-gnu')
         with:
           tool: cargo-zigbuild
@@ -411,7 +411,7 @@ jobs:
           cache-key: ${{ matrix.target }}
 
       - name: Build Python wheel
-        uses: pypa/cibuildwheel@b9e566a2b284570af229f6c2a33673410d0389a3 # v4.3.4
+        uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e # v4.3.5
         with:
           package-dir: bindings/python
           output-dir: bindings/python/dist

@@ -1826,7 +1826,7 @@ fn failed_spawn_does_not_expose_a_previous_custom_recording() {
 #[test]
 fn open_reports_the_daemon_pid_the_child_and_readiness() {
     let sandbox = Sandbox::new("open-payload");
-    let raw = sandbox.ok(&["--json", "open"]);
+    let raw = sandbox.ok(&["--json", "open", "--wait-ready", "--timeout-ready", "20000"]);
     let payload: serde_json::Value = serde_json::from_str(&raw).expect("open json");
     let data = &payload["data"];
 
@@ -2228,19 +2228,20 @@ fn interactive_reader() -> &'static str {
     }
 }
 
-fn start_command_with_stale_exit(sandbox: &Sandbox) {
-    sandbox.ok(&["open"]);
+fn start_command_with_stale_exit(sandbox: &Sandbox, command: &str, marker: &str) {
+    sandbox.ok(&["open", "--wait-ready", "--timeout-ready", "20000"]);
     sandbox.ok(&["submit", &exit_with(3)]);
-    sandbox.ok(&["wait", "command"]);
-    sandbox.ok(&["submit", &slow_exit_with(9)]);
-    sandbox.wait_for_text(RUN_MARKER, "15000");
+    sandbox.ok(&["expect", "exit-code", "3", "--timeout", "20000"]);
+    sandbox.ok(&["wait", "ready", "--timeout", "20000"]);
+    sandbox.ok(&["submit", command]);
+    sandbox.wait_for_text(marker, "15000");
 }
 
 /// Must wait for the current command instead of accepting a stale exit code.
 #[test]
 fn expect_exit_code_waits_for_the_current_command() {
     let sandbox = Sandbox::new("exit-code-stale");
-    start_command_with_stale_exit(&sandbox);
+    start_command_with_stale_exit(&sandbox, &slow_exit_with(9), RUN_MARKER);
     let out = sandbox.run(&["expect", "exit-code", "3", "--timeout", "20000"]);
 
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -2259,7 +2260,7 @@ fn expect_exit_code_waits_for_the_current_command() {
 #[test]
 fn expect_exit_code_timing_out_does_not_accept_a_stale_code() {
     let sandbox = Sandbox::new("exit-code-timeout");
-    start_command_with_stale_exit(&sandbox);
+    start_command_with_stale_exit(&sandbox, interactive_reader(), "reader-ready");
     let out = sandbox.run(&["expect", "exit-code", "3", "--timeout", "300"]);
 
     assert_eq!(
@@ -2273,6 +2274,8 @@ fn expect_exit_code_timing_out_does_not_accept_a_stale_code() {
         stderr.contains("still running"),
         "expected the failure to say the command had not finished, got: {stderr}"
     );
+    sandbox.ok(&["submit", "continue"]);
+    sandbox.ok(&["expect", "exit-code", "0", "--timeout", "15000"]);
 }
 
 #[test]

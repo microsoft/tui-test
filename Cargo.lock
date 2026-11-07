@@ -1836,6 +1836,7 @@ dependencies = [
  "crossterm",
  "dialoguer",
  "dirs",
+ "gif",
  "interprocess",
  "png",
  "serde",

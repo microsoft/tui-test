@@ -1038,6 +1038,14 @@ export class TuiTest {
     return this.#runtime.stopRecording();
   }
 
+  async pauseRecording(): Promise<void> {
+    return this.#runtime.pauseRecording();
+  }
+
+  async resumeRecording(): Promise<void> {
+    return this.#runtime.resumeRecording();
+  }
+
   getByText(text: string, opts: TextSelectorOptions = {}): Locator {
     return this.#makeLocator(textQuery(text, opts));
   }

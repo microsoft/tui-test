@@ -108,7 +108,15 @@ fn write_scripts_to(dir: &Path) -> std::io::Result<()> {
         ),
     ];
     for (name, body) in files {
-        std::fs::write(dir.join(name), body)?;
+        let path = dir.join(name);
+        // A running PowerShell can deny writes to its startup script.
+        match std::fs::read(&path) {
+            Ok(existing) if existing == body.as_bytes() => continue,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        std::fs::write(path, body)?;
     }
     Ok(())
 }
@@ -275,21 +283,57 @@ fn windows_exe(name: &str) -> String {
 }
 
 pub(crate) fn which(cmd: &str) -> Option<String> {
-    let path = std::env::var_os("PATH")?;
-    let exts: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".EXE;.CMD;.BAT".to_string())
+    which_in(
+        cmd,
+        std::env::var_os("PATH").as_deref(),
+        std::env::var_os("PATHEXT").as_deref(),
+        &std::env::current_dir().ok()?,
+    )
+    .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// Resolve relative PATH entries and explicit paths against the child's directory.
+pub(crate) fn which_in(
+    cmd: &str,
+    path: Option<&std::ffi::OsStr>,
+    pathext: Option<&std::ffi::OsStr>,
+    cwd: &Path,
+) -> Option<PathBuf> {
+    let extensions: Vec<String> = if cfg!(windows) {
+        pathext
+            .unwrap_or_else(|| std::ffi::OsStr::new(".EXE;.CMD;.BAT"))
+            .to_string_lossy()
             .split(';')
+            .filter(|s| s.starts_with('.') && s.len() > 1)
             .map(|s| s.to_lowercase())
             .collect()
     } else {
         vec![String::new()]
     };
-    for dir in std::env::split_paths(&path) {
-        for ext in &exts {
+    let has_extension = cfg!(windows)
+        && Path::new(cmd).extension().is_some_and(|extension| {
+            extensions
+                .iter()
+                .any(|ext| ext[1..].eq_ignore_ascii_case(&extension.to_string_lossy()))
+        });
+    let extensions = if has_extension {
+        vec![String::new()]
+    } else {
+        extensions
+    };
+    let explicit = Path::new(cmd).components().count() > 1 || Path::new(cmd).is_absolute();
+    let directories = if explicit {
+        vec![cwd.to_path_buf()]
+    } else {
+        std::env::split_paths(path?)
+            .map(|dir| cwd.join(dir))
+            .collect()
+    };
+    for dir in directories {
+        for ext in &extensions {
             let candidate = dir.join(format!("{cmd}{ext}"));
             if is_executable(&candidate) {
-                return Some(candidate.to_string_lossy().into_owned());
+                return Some(candidate);
             }
         }
     }

@@ -74,6 +74,9 @@ pub(crate) struct AutomaticRecordingSnapshot {
 pub(crate) enum CaptureError {
     AlreadyActive,
     NotActive,
+    AlreadyPaused,
+    NotPaused,
+    UnsupportedPauseResume,
     WorkerStopped,
     Io(String),
 }
@@ -134,16 +137,37 @@ impl Recorder {
         }
     }
 
+    #[cfg(test)]
     pub fn start(&self, request: StartRecording) -> Result<(), CaptureError> {
+        self.start_at(request, Instant::now())
+    }
+
+    pub fn start_at(&self, request: StartRecording, at: Instant) -> Result<(), CaptureError> {
         let (reply, response) = mpsc::sync_channel(0);
         self.sender
             .send(Message::Start {
-                at: Instant::now(),
+                at,
                 request: Box::new(request),
                 reply,
             })
             .map_err(|_| CaptureError::WorkerStopped)
             .and_then(|()| response.recv().unwrap_or(Err(CaptureError::WorkerStopped)))
+    }
+
+    pub fn pause(&self) -> Result<(), CaptureError> {
+        let (reply, response) = mpsc::sync_channel(0);
+        self.sender
+            .send(Message::Pause { reply })
+            .map_err(|_| CaptureError::WorkerStopped)?;
+        response.recv().unwrap_or(Err(CaptureError::WorkerStopped))
+    }
+
+    pub fn resume(&self) -> Result<(), CaptureError> {
+        let (reply, response) = mpsc::sync_channel(0);
+        self.sender
+            .send(Message::Resume { reply })
+            .map_err(|_| CaptureError::WorkerStopped)?;
+        response.recv().unwrap_or(Err(CaptureError::WorkerStopped))
     }
 
     pub fn stop(&self) -> Result<StoppedRecording, CaptureError> {
@@ -224,6 +248,12 @@ enum Message {
     Start {
         at: Instant,
         request: Box<StartRecording>,
+        reply: mpsc::SyncSender<Result<(), CaptureError>>,
+    },
+    Pause {
+        reply: mpsc::SyncSender<Result<(), CaptureError>>,
+    },
+    Resume {
         reply: mpsc::SyncSender<Result<(), CaptureError>>,
     },
     Stop {
@@ -676,6 +706,102 @@ mod tests {
             timeline: frames::TimelineOptions::default(),
             #[cfg(feature = "recording-raster")]
             ffmpeg_path: None,
+        }
+    }
+
+    #[test]
+    fn pause_resume_only_accepts_raster_and_keeps_recovery_casts_continuous() {
+        use std::time::Duration;
+
+        for format in [
+            RecordingFormat::Cast,
+            RecordingFormat::Apng,
+            RecordingFormat::Gif,
+            RecordingFormat::Mp4,
+        ] {
+            let primary = temp_path("pause-primary");
+            let target = temp_path("pause-manual");
+            let started = Instant::now();
+            let recorder = Recorder::create_at(
+                Some(primary.clone()),
+                5,
+                4,
+                &[],
+                false,
+                Arc::new(crate::logger::Logger::disabled()),
+                started,
+            )
+            .unwrap();
+            assert!(matches!(recorder.pause(), Err(CaptureError::NotActive)));
+            assert!(matches!(recorder.resume(), Err(CaptureError::NotActive)));
+            let mut request = manual_request(&target);
+            request.format = format;
+            recorder.start_at(request, started).unwrap();
+            let send = |second: u64, bytes: &[u8]| {
+                recorder
+                    .sender
+                    .send(Message::Data {
+                        at: started + Duration::from_secs(second),
+                        bytes: bytes.to_vec(),
+                    })
+                    .unwrap();
+            };
+            send(1, b"base\x1b[?1049hALT\x1b[31");
+            if format == RecordingFormat::Cast {
+                assert!(matches!(
+                    recorder.pause(),
+                    Err(CaptureError::UnsupportedPauseResume)
+                ));
+                assert!(matches!(
+                    recorder.resume(),
+                    Err(CaptureError::UnsupportedPauseResume)
+                ));
+            } else {
+                assert!(matches!(recorder.resume(), Err(CaptureError::NotPaused)));
+                recorder.pause().unwrap();
+                assert!(matches!(recorder.pause(), Err(CaptureError::AlreadyPaused)));
+            }
+            send(3, b"mDURING\x1b[2J\x1b[H");
+            recorder
+                .sender
+                .send(Message::Resize {
+                    at: started + Duration::from_secs(4),
+                    cols: 7,
+                    rows: 3,
+                })
+                .unwrap();
+            send(5, b"\x1b[5 qnext\xc3");
+            if format != RecordingFormat::Cast {
+                recorder.resume().unwrap();
+                assert!(matches!(recorder.resume(), Err(CaptureError::NotPaused)));
+            }
+            send(8, b"\xa9!");
+            if format != RecordingFormat::Cast {
+                recorder.pause().unwrap();
+            }
+            send(12, b"AFTER");
+            recorder.stop().unwrap();
+            assert!(matches!(recorder.pause(), Err(CaptureError::NotActive)));
+            assert!(matches!(recorder.resume(), Err(CaptureError::NotActive)));
+            drop(recorder);
+            let manual = std::fs::read_to_string(&target).unwrap();
+            let automatic = std::fs::read_to_string(&primary).unwrap();
+            std::fs::remove_file(primary).unwrap();
+            std::fs::remove_file(target).unwrap();
+            assert!(manual.contains("DURING"));
+            assert!(manual.contains("AFTER"));
+            assert!(manual.contains("é!"));
+            assert_eq!(
+                manual.lines().skip(2).collect::<Vec<_>>(),
+                automatic.lines().skip(1).collect::<Vec<_>>(),
+                "{format:?}"
+            );
+            let events: Vec<serde_json::Value> = manual
+                .lines()
+                .skip(1)
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(events.last().unwrap()[0], 12.0);
         }
     }
 
