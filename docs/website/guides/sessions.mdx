@@ -6,19 +6,104 @@ sidebar:
   order: 1
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Shell sessions and direct program launches
 
 Use `open` when you need a shell, prompt readiness, and shell-command tracking.
 Use `run` to launch a program directly.
 
-```sh
-tui-test --session shell open --shell bash
-tui-test --session shell submit "echo hello"
-tui-test --session shell wait command
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
 
-tui-test --session app run my-app
-tui-test --session app wait exit
-```
+    ```js
+    await terminal.open({ shell: "bash" });
+    await terminal.submit("echo hello");
+    await terminal.waitCommand();
+    await terminal.close();
+    await terminal.run("my-app", [], { backend: "alacritty" });
+    await terminal.waitExit();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.open(shell="bash")
+    await terminal.submit("echo hello")
+    await terminal.wait_command()
+    await terminal.close()
+    await terminal.run("my-app", backend="alacritty")
+    await terminal.wait_exit()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{OpenOptions, Operation, RunOptions};
+
+    terminal.open(OpenOptions {
+        shell: Some(tui_test::shell::Shell::Bash),
+        ..Default::default()
+    })?;
+    terminal.execute(Operation::Submit {
+        data: Some("echo hello".into()),
+    })?;
+    terminal.execute(Operation::WaitCommand { timeout_ms: None })?;
+    terminal.close()?;
+    terminal.run(RunOptions {
+        program: "my-app".into(),
+        args: vec![],
+        backend: tui_test::terminal::backend::Backend::Alacritty,
+        profile: Default::default(),
+        cols: 80,
+        rows: 30,
+        cwd: None,
+        env: vec![],
+        wait_ready: None,
+        restart: false,
+        timeouts: Default::default(),
+        recording: Default::default(),
+        style: Default::default(),
+    })?;
+    terminal.execute(Operation::WaitExit { timeout_ms: None })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if _, err := terminal.Open(tuitest.OpenOptions{Shell: tuitest.Bash, SpawnOptions: tuitest.SpawnOptions{}}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Submit(tuitest.Ptr("echo hello")); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.WaitCommand(tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Close(); err != nil {
+        t.Fatal(err)
+    }
+    if _, err := terminal.Run("my-app", nil, tuitest.SpawnOptions{Backend: tuitest.Alacritty}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.WaitExit(tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test --session shell open --shell bash
+    tui-test --session shell submit "echo hello"
+    tui-test --session shell wait command
+    tui-test --session shell close
+
+    tui-test --session app run my-app
+    tui-test --session app wait exit
+    ```
+  </TabItem>
+</Tabs>
 
 In the language APIs, the corresponding methods are `open` and `run`
 (`Open` and `Run` in Go). Client construction does not start a terminal.
@@ -42,9 +127,53 @@ in-process session.
 
 ## Terminal size, working directory, and environment
 
-```sh
-tui-test --session build open --cols 100 --rows 40 --cwd . --env TERM=xterm-256color
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.open({
+      cols: 100,
+      rows: 40,
+      cwd: ".",
+      env: { TERM: "xterm-256color" },
+    });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.open(cols=100, rows=40, cwd=".", env={"TERM": "xterm-256color"})
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::OpenOptions;
+
+    terminal.open(OpenOptions {
+        cols: 100,
+        rows: 40,
+        cwd: Some(".".into()),
+        env: vec![("TERM".into(), "xterm-256color".into())],
+        ..Default::default()
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if _, err := terminal.Open(tuitest.OpenOptions{SpawnOptions: tuitest.SpawnOptions{Cols: tuitest.Ptr(uint16(100)), Rows: tuitest.Ptr(uint16(40)), Cwd: ".", Env: map[string]string{"TERM": "xterm-256color"}}}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test --session build open --cols 100 --rows 40 --cwd . --env TERM=xterm-256color
+    ```
+  </TabItem>
+</Tabs>
 
 The default size is 80 columns by 30 rows. Launch options accept a working
 directory, environment overrides, backend, profile, readiness behavior, and
@@ -57,9 +186,44 @@ See the [CLI spawn options](/docs/reference/cli/#spawn-options) or your
 `open` and `run` reuse a live CLI session unless you pass `--restart`.
 Use an explicit restart when a test needs a fresh process:
 
-```sh
-tui-test --session build restart --graceful-timeout 5000
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.restart({ gracefulTimeout: 5000 });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.restart(graceful_timeout=5000)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.execute(Operation::Restart {
+        graceful_timeout_ms: 5000,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if _, err := terminal.Restart(tuitest.RestartOptions{GracefulTimeout: tuitest.Ptr(5000 * time.Millisecond)}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test --session build restart --graceful-timeout 5000
+    ```
+  </TabItem>
+</Tabs>
 
 `restart` replays the last successful launch with its original working directory
 and options, plus the latest terminal size. It sends Ctrl-C and waits up to

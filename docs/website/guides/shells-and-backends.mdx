@@ -6,14 +6,52 @@ sidebar:
   order: 9
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Supported shells
 
 Supported shells are bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, and
 nushell. The selected shell must be installed.
 
-```sh
-tui-test open --shell bash
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.open({ shell: "bash" });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.open(shell="bash")
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::OpenOptions;
+
+    terminal.open(OpenOptions {
+        shell: Some(tui_test::shell::Shell::Bash),
+        ..Default::default()
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if _, err := terminal.Open(tuitest.OpenOptions{Shell: tuitest.Bash, SpawnOptions: tuitest.SpawnOptions{}}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test open --shell bash
+    ```
+  </TabItem>
+</Tabs>
 
 ## Shell integration and readiness
 
@@ -28,10 +66,73 @@ The same input, inspection, locator, and capture APIs operate across backends.
 
 ## Select a backend
 
-```sh
-tui-test open --backend xtermjs
-tui-test run --backend ghostty my-app
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.open({ backend: "xtermjs" });
+    await terminal.close();
+    await terminal.run("my-app", [], { backend: "ghostty" });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.open(backend="xtermjs")
+    await terminal.close()
+    await terminal.run("my-app", backend="ghostty")
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{OpenOptions, RunOptions};
+
+    terminal.open(OpenOptions {
+        backend: tui_test::terminal::backend::Backend::Xtermjs,
+        ..Default::default()
+    })?;
+    terminal.close()?;
+    terminal.run(RunOptions {
+        program: "my-app".into(),
+        args: vec![],
+        backend: tui_test::terminal::backend::Backend::Ghostty,
+        profile: Default::default(),
+        cols: 80,
+        rows: 30,
+        cwd: None,
+        env: vec![],
+        wait_ready: None,
+        restart: false,
+        timeouts: Default::default(),
+        recording: Default::default(),
+        style: Default::default(),
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if _, err := terminal.Open(tuitest.OpenOptions{SpawnOptions: tuitest.SpawnOptions{Backend: tuitest.XtermJS}}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Close(); err != nil {
+        t.Fatal(err)
+    }
+    if _, err := terminal.Run("my-app", nil, tuitest.SpawnOptions{Backend: tuitest.Ghostty}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test open --backend xtermjs
+    tui-test close
+    tui-test run --backend ghostty my-app
+    ```
+  </TabItem>
+</Tabs>
 
 Library clients and launch options accept `backend`.
 The values are `alacritty`, `ghostty`, `rio`, and `xtermjs`.
@@ -44,19 +145,15 @@ Language and native runtime requirements are listed on the
 Source builds need Rust and the dependencies for the enabled backends.
 The repository's CI installs Zig for the Ghostty build.
 
-The xterm.js backend embeds its JavaScript bundles and does not need Node.js at
-runtime.
+The xterm.js backend does not require Node.js.
 
 ## Backend differences and limitations
 
 Terminal backends can differ in Unicode widths, escape-sequence handling, and
 reported metadata. Run tests against the backend you intend to support.
 
-The xterm.js backend uses Unicode 11 width tables to match Alacritty's measured
-cell widths. It reports underline color only on cells with an underline style;
-`SGR 58` alone is not readable from a cell even though rendering is unchanged.
-See the [xterm.js backend reference](/docs/reference/xtermjs/) for the measured
-cases and shim behavior.
+The xterm.js backend reports underline color only on cells with an underline
+style. Run tests against each backend whose behavior matters to your application.
 
 ## Rust backend features
 

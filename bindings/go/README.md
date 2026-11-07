@@ -14,4 +14,4 @@ dynamic loader.
 
 See the [Go API](https://tui-test.dev/docs/api/go/) for examples, all methods,
 native engine caching, cross-compilation, and test helpers.
-Source checkouts need a [native library build](https://tui-test.dev/docs/reference/native-library/#build-and-use).
+For source checkouts, see [building from source](https://tui-test.dev/docs/contributing/#build-from-source).

@@ -14,5 +14,5 @@ cargo build --locked -p tui-test-ffi
 Set `TUI_TEST_NATIVE_LIBRARY` to the built shared library when using a binding
 from a source checkout.
 
-See the [native library reference](https://tui-test.dev/docs/reference/native-library/)
-for platform-specific builds, generated declarations, ownership, and asynchronous calls.
+See [building from source](https://tui-test.dev/docs/contributing/#build-from-source)
+for platform-specific build instructions.

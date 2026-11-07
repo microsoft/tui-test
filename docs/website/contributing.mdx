@@ -16,11 +16,14 @@ be available; CI installs Zig for Ghostty.
 cargo build -p tui-test-cli -p tui-test-ffi
 ```
 
-The [native library reference](/docs/reference/native-library/) has platform
-requirements, musl build flags, and examples for using a local library.
-Language-specific source build instructions are in the
-[Python](/docs/api/python/#build-from-source) and
-[JavaScript](/docs/api/javascript/#install) references.
+The native library is `target/debug/libtui_test_ffi.so` on Linux,
+`libtui_test_ffi.dylib` on macOS, or `tui_test_ffi.dll` on Windows.
+Set `TUI_TEST_NATIVE_LIBRARY` to its absolute path when using a language package
+from a source checkout. On musl Linux, add
+`-C target-feature=-crt-static` to `RUSTFLAGS` when building the shared library.
+
+For JavaScript, run `npm ci` and `npm run build` from `bindings/js`.
+Python wheel instructions are in the [Python reference](/docs/api/python/#build-from-source).
 
 ## Run repository checks
 
@@ -39,23 +42,6 @@ cargo test -p tui-test-rs --features recording-font-jetbrains-mono-styles -- --t
 
 The workflow also checks the native header, Go formatting and tests, Python and
 JavaScript bindings, and release-package assembly.
-See [xterm.js maintenance](/docs/reference/xtermjs/#updating) when changing
-vendored terminal assets.
-
-## Update language bindings
-
-Shared owned Rust models are authoritative.
-Regenerate boundary declarations rather than editing generated files:
-
-```sh
-cargo run --locked -p tui-test-bindgen
-cargo run --locked -p tui-test-bindgen -- --check
-```
-
-Keep `rustfmt` and `gofmt` on `PATH`.
-The [native library reference](/docs/reference/native-library/#generate-boundaries)
-lists model sources, generated outputs, and handwritten responsibilities.
-Keep the library and language adapter on the same source revision.
 
 ## Update documentation
 
@@ -75,6 +61,11 @@ npm run build
 Adjust the source path to your checkout.
 Use `/docs/.../` for website links and full GitHub URLs for source files.
 Each page needs a title and description in its frontmatter.
+For equivalent language examples, use Starlight `Tabs` with
+`syncKey="example-language"` and labels `JavaScript`, `Python`, `Rust`, `Go`,
+and `CLI`. The header selector uses these labels to restore the preferred
+language. Keep OS choices and examples without language equivalents outside
+that sync group.
 
 ## Contributor license agreement
 

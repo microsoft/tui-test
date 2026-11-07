@@ -116,11 +116,10 @@ files = ["fonts/BerkeleyMono.ttf"]
 
 `bold`, `italic`, and `bold_italic` fall back to `family` when unset.
 Raster output tries the font stack from left to right and can load additional
-font files. Missing families or files fall back. Each canonical file is loaded
-once, with a total custom-font data limit of 64 MiB.
+font files. Missing families or files fall back.
+Custom font data is limited to 64 MiB in total.
 
-Use monospace fonts. Glyphs are scaled horizontally to fit the fixed cell width,
-so proportional fonts can appear distorted.
+Use monospace fonts.
 SVG screenshots name the family but use fonts installed on the viewing machine.
 Capture commands also accept `--zoom`.
 

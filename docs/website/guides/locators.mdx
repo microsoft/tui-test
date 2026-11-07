@@ -6,16 +6,76 @@ sidebar:
   order: 2
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Text locators
 
 Locators describe a query and resolve against the latest terminal screen before
 each read or action. They do not hold a stale cell location.
 
-```sh
-tui-test find text "Save"
-tui-test expect text "Save"
-tui-test click text "Save"
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.getByText("Save").locations());
+    await terminal.getByText("Save").expect();
+    await terminal.getByText("Save").click({ button: "left", clicks: 1 });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.get_by_text("Save").locations())
+    await terminal.get_by_text("Save").expect()
+    await terminal.get_by_text("Save").click(button="left", clicks=1)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{LocatorClickOptions, MouseButton, MouseOptions};
+
+    println!("{:?}", terminal.get_by_text("Save").locations()?);
+    terminal.get_by_text("Save").expect()?;
+    terminal
+        .get_by_text("Save")
+        .click_with(LocatorClickOptions {
+            mouse: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+            clicks: 1,
+            ..Default::default()
+        })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.GetByText("Save", tuitest.TextSelectorOptions{}).Locations()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    if err := terminal.GetByText("Save", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Save", tuitest.TextSelectorOptions{}).Click(tuitest.LocatorClickOptions{MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left}, Clicks: tuitest.Ptr(uint32(1))}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test find text "Save"
+    tui-test expect text "Save"
+    tui-test click text "Save"
+    ```
+  </TabItem>
+</Tabs>
 
 In JavaScript use `terminal.getByText("Save")`; in Python use
 `terminal.get_by_text("Save")`. Rust and Go expose the same operations through
@@ -23,10 +83,72 @@ In JavaScript use `terminal.getByText("Save")`; in Python use
 
 ## Regular expressions and whitespace
 
-```sh
-tui-test expect text 'item \d+' --regex
-tui-test find text "first second" --whitespace normalize
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.getByText("item \\d+", { regex: true }).expect();
+    console.log(
+      await terminal
+        .getByText("first second", { whitespace: "normalize" })
+        .locations(),
+    );
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.get_by_text("item \\d+", regex=True).expect()
+    print(await terminal.get_by_text("first second", whitespace="normalize").locations())
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{TextSelector, WhitespaceMode};
+
+    terminal
+        .get_by_text(TextSelector {
+            text: "item \\d+".into(),
+            regex: true,
+            ..Default::default()
+        })
+        .expect()?;
+    println!(
+        "{:?}",
+        terminal
+            .get_by_text(TextSelector {
+                text: "first second".into(),
+                whitespace: WhitespaceMode::Normalize,
+                ..Default::default()
+            })
+            .locations()?
+    );
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("item \\d+", tuitest.TextSelectorOptions{Regex: true}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    {
+        value, err := terminal.GetByText("first second", tuitest.TextSelectorOptions{Whitespace: tuitest.Normalize}).Locations()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test expect text 'item \d+' --regex
+    tui-test find text "first second" --whitespace normalize
+    ```
+  </TabItem>
+</Tabs>
 
 Text queries accept literal text or a regular expression. Whitespace matching
 is `exact` or `normalize`. Add `--full` to search scrollback as well as the
@@ -34,10 +156,67 @@ live screen.
 
 ## Style locators
 
-```sh
-tui-test expect text "Ready" --fg green --bold
-tui-test expect text "Ready" --bold=false
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal
+      .getByText("Ready")
+      .getByStyle({ foreground: "green", bold: true })
+      .expect();
+    await terminal.getByText("Ready").getByStyle({ bold: false }).expect();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    from tui_test import TextStyle
+
+    await terminal.get_by_text("Ready").get_by_style(TextStyle(foreground="green", bold=True)).expect()
+    await terminal.get_by_text("Ready").get_by_style(TextStyle(bold=False)).expect()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::TextStyle;
+
+    terminal
+        .get_by_text("Ready")
+        .get_by_style(TextStyle {
+            foreground: Some("green".into()),
+            bold: Some(true),
+            ..Default::default()
+        })
+        .expect()?;
+    terminal
+        .get_by_text("Ready")
+        .get_by_style(TextStyle {
+            bold: Some(false),
+            ..Default::default()
+        })
+        .expect()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).GetByStyle(tuitest.TextStyle{Foreground: tuitest.Ptr("green"), Bold: tuitest.Ptr(true)}, tuitest.StyleSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).GetByStyle(tuitest.TextStyle{Bold: tuitest.Ptr(false)}, tuitest.StyleSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test expect text "Ready" --fg green --bold
+    tui-test expect text "Ready" --bold=false
+    ```
+  </TabItem>
+</Tabs>
 
 Style fields include foreground, background, bold, dim, italic, underline style
 and color, inverse, hidden, strikethrough, and blink. Boolean options can require
@@ -51,10 +230,53 @@ when the match contains visible text.
 
 ## Hyperlink locators
 
-```sh
-tui-test expect text "Docs" --link "https://example.com/docs"
-tui-test expect text "Plain text" --link ""
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.getByText("Docs").getByLink("https://example.com/docs").expect();
+    await terminal.getByText("Plain text").getByLink("").expect();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.get_by_text("Docs").get_by_link("https://example.com/docs").expect()
+    await terminal.get_by_text("Plain text").get_by_link("").expect()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    terminal
+        .get_by_text("Docs")
+        .get_by_link("https://example.com/docs")
+        .expect()?;
+    terminal
+        .get_by_text("Plain text")
+        .get_by_link("")
+        .expect()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Docs", tuitest.TextSelectorOptions{}).GetByLink("https://example.com/docs", tuitest.LinkSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Plain text", tuitest.TextSelectorOptions{}).GetByLink("", tuitest.LinkSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test expect text "Docs" --link "https://example.com/docs"
+    tui-test expect text "Plain text" --link ""
+    ```
+  </TabItem>
+</Tabs>
 
 Links match exact OSC 8 targets, not the visible spelling of a URL.
 An empty URI requires no link. Every cell, including spaces, must satisfy
@@ -66,22 +288,119 @@ chained selectors with `within` check whole matches.
 
 ## Relative locators
 
-```sh
-tui-test click text "Save" --after-text "Settings" --match unique
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal
+      .getByText("Settings")
+      .getByText("Save", { direction: "after" })
+      .unique()
+      .click({ button: "left", clicks: 1 });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.get_by_text("Settings").get_by_text("Save", direction="after").unique().click(button="left", clicks=1)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{LocatorClickOptions, LocatorDirection, MouseButton, MouseOptions};
+
+    terminal
+        .get_by_text("Settings")
+        .get_by_text_relative("Save", LocatorDirection::After)
+        .unique()
+        .click_with(LocatorClickOptions {
+            mouse: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+            clicks: 1,
+            ..Default::default()
+        })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Settings", tuitest.TextSelectorOptions{}).GetByText("Save", tuitest.TextSelectorOptions{Direction: tuitest.After}).Unique().Click(tuitest.LocatorClickOptions{MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left}, Clicks: tuitest.Ptr(uint32(1))}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test click text "Save" --after-text "Settings" --match unique
+    ```
+  </TabItem>
+</Tabs>
 
 Library locators can chain text, style, and link selectors with `within`,
 `after`, or `before` directions:
 
-```js
-const save = terminal
-  .getByText("Settings")
-  .getByText("Save", { direction: "after" })
-  .getByStyle({ foreground: "green" })
-  .unique();
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
 
-await save.click();
-```
+    ```js
+    await terminal
+      .getByText("Settings")
+      .getByText("Save", { direction: "after" })
+      .getByStyle({ foreground: "green" })
+      .unique()
+      .click({ button: "left", clicks: 1 });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    from tui_test import TextStyle
+
+    await terminal.get_by_text("Settings").get_by_text("Save", direction="after").get_by_style(TextStyle(foreground="green")).unique().click(button="left", clicks=1)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{LocatorClickOptions, LocatorDirection, MouseButton, MouseOptions, TextStyle};
+
+    terminal
+        .get_by_text("Settings")
+        .get_by_text_relative("Save", LocatorDirection::After)
+        .get_by_style(TextStyle {
+            foreground: Some("green".into()),
+            ..Default::default()
+        })
+        .unique()
+        .click_with(LocatorClickOptions {
+            mouse: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+            clicks: 1,
+            ..Default::default()
+        })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Settings", tuitest.TextSelectorOptions{}).GetByText("Save", tuitest.TextSelectorOptions{Direction: tuitest.After}).GetByStyle(tuitest.TextStyle{Foreground: tuitest.Ptr("green")}, tuitest.StyleSelectorOptions{}).Unique().Click(tuitest.LocatorClickOptions{MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left}, Clicks: tuitest.Ptr(uint32(1))}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test click text "Save" --after-text "Settings" --fg green --match unique
+    ```
+  </TabItem>
+</Tabs>
 
 CLI anchors accept `--after-regex` or `--before-regex`, match selection with
 `--after-match` / `--before-match`, and zero-based
@@ -89,14 +408,73 @@ CLI anchors accept `--after-regex` or `--before-regex`, match selection with
 
 ## Combine and filter locators
 
-```js
-const label = terminal.getByText("Documentation");
-const link = terminal.getByLink("https://example.com/docs");
-const linkedCells = label.and(link);
-const either = label.or(terminal.getByText("Help"));
-const containsLink = label.filter({ has: link });
-const withoutOldText = label.filter({ hasNot: terminal.getByText("old") });
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    const label = terminal.getByText("Documentation");
+    const link = terminal.getByLink("https://example.com/docs");
+    const linkedCells = label.and(link);
+    const either = label.or(terminal.getByText("Help"));
+    const containsLink = label.filter({ has: link });
+    const withoutOldText = label.filter({ hasNot: terminal.getByText("old") });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    label = terminal.get_by_text("Documentation")
+    link = terminal.get_by_link("https://example.com/docs")
+    linked_cells = label.and_(link)
+    either = label.or_(terminal.get_by_text("Help"))
+    contains_link = label.filter(has=link)
+    without_old_text = label.filter(has_not=terminal.get_by_text("old"))
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    let label = terminal.get_by_text("Documentation");
+    let link = terminal.get_by_link("https://example.com/docs");
+    let linked_cells = label.and(&link)?;
+    let either = label.or(&terminal.get_by_text("Help"))?;
+    let contains_link = label.filter(tui_test::LocatorFilterOptions {
+        has: Some(link),
+        ..Default::default()
+    })?;
+    let without_old_text = label.filter(tui_test::LocatorFilterOptions {
+        has_not: Some(terminal.get_by_text("old")),
+        ..Default::default()
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    label := terminal.GetByText("Documentation", tuitest.TextSelectorOptions{})
+    link := terminal.GetByLink("https://example.com/docs", tuitest.LinkSelectorOptions{})
+    linkedCells, err := label.And(link)
+    if err != nil {
+        t.Fatal(err)
+    }
+    either, err := label.Or(terminal.GetByText("Help", tuitest.TextSelectorOptions{}))
+    if err != nil {
+        t.Fatal(err)
+    }
+    containsLink, err := label.Filter(tuitest.LocatorFilterOptions{Has: link})
+    if err != nil {
+        t.Fatal(err)
+    }
+    withoutOldText, err := label.Filter(tuitest.LocatorFilterOptions{
+        HasNot: terminal.GetByText("old", tuitest.TextSelectorOptions{}),
+    })
+    if err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(linkedCells, either, containsLink, withoutOldText)
+    ```
+  </TabItem>
+</Tabs>
 
 `and` keeps shared cells; `or` combines cells without duplicates. Adjacent cells
 merge within each physical row, even across original matches. Gaps and row
@@ -146,11 +524,71 @@ it to be absent. `wait()` supports visible and hidden states.
 Click options select the button, modifiers, click count, and timeout.
 `highlight()` marks matches in screenshots and the live monitor.
 
-```sh
-tui-test expect text "Loading" --not --timeout 10000
-tui-test click text "Continue" --button left --clicks 1
-tui-test highlight text "Done"
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.getByText("Loading").expect({ not: true, timeout: 10000 });
+    await terminal.getByText("Continue").click({ button: "left", clicks: 1 });
+    await terminal.getByText("Done").highlight();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.get_by_text("Loading").expect(not_=True, timeout=10000)
+    await terminal.get_by_text("Continue").click(button="left", clicks=1)
+    await terminal.get_by_text("Done").highlight()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{LocatorClickOptions, LocatorExpectOptions, MouseButton, MouseOptions};
+
+    terminal
+        .get_by_text("Loading")
+        .expect_with(LocatorExpectOptions {
+            not: true,
+            timeout_ms: Some(10000),
+            ..Default::default()
+        })?;
+    terminal
+        .get_by_text("Continue")
+        .click_with(LocatorClickOptions {
+            mouse: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+            clicks: 1,
+            ..Default::default()
+        })?;
+    terminal.get_by_text("Done").highlight()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Loading", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{Not: true, Timeout: tuitest.Ptr(10000 * time.Millisecond)}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Continue", tuitest.TextSelectorOptions{}).Click(tuitest.LocatorClickOptions{MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left}, Clicks: tuitest.Ptr(uint32(1))}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Done", tuitest.TextSelectorOptions{}).Highlight(tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test expect text "Loading" --not --timeout 10000
+    tui-test click text "Continue" --button left --clicks 1
+    tui-test highlight text "Done"
+    ```
+  </TabItem>
+</Tabs>
 
 ## Locate text in scrollback
 

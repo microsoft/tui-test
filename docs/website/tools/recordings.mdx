@@ -6,6 +6,8 @@ sidebar:
   order: 2
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Choose a recording format
 
 | Extension | Format | Requirements |
@@ -20,15 +22,115 @@ GIF, and MP4. A `recording-font-jetbrains-mono*` feature also bundles fonts.
 
 ## Start and stop a recording
 
-```sh
-tui-test run my-app
-tui-test expect text "Ready"
-tui-test record start demo.gif --fps 30
-tui-test click text "Continue"
-tui-test expect text "Done"
-tui-test record stop
-tui-test close
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.run("my-app", [], { backend: "alacritty" });
+    await terminal.getByText("Ready").expect();
+    await terminal.startRecording("demo.gif", { fps: 30 });
+    await terminal.getByText("Continue").click({ button: "left", clicks: 1 });
+    await terminal.getByText("Done").expect();
+    await terminal.stopRecording();
+    await terminal.close();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.run("my-app", backend="alacritty")
+    await terminal.get_by_text("Ready").expect()
+    await terminal.start_recording("demo.gif", fps=30)
+    await terminal.get_by_text("Continue").click(button="left", clicks=1)
+    await terminal.get_by_text("Done").expect()
+    await terminal.stop_recording()
+    await terminal.close()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{LocatorClickOptions, MouseButton, MouseOptions, Operation, RunOptions};
+
+    terminal.run(RunOptions {
+        program: "my-app".into(),
+        args: vec![],
+        backend: tui_test::terminal::backend::Backend::Alacritty,
+        profile: Default::default(),
+        cols: 80,
+        rows: 30,
+        cwd: None,
+        env: vec![],
+        wait_ready: None,
+        restart: false,
+        timeouts: Default::default(),
+        recording: Default::default(),
+        style: Default::default(),
+    })?;
+    terminal.get_by_text("Ready").expect()?;
+    terminal.execute(Operation::StartRecording {
+        path: "demo.gif".into(),
+        format: None,
+        fps: Some(30),
+        speed: None,
+        idle_time_limit: None,
+        zoom: None,
+        background: None,
+    })?;
+    terminal
+        .get_by_text("Continue")
+        .click_with(LocatorClickOptions {
+            mouse: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+            clicks: 1,
+            ..Default::default()
+        })?;
+    terminal.get_by_text("Done").expect()?;
+    terminal.execute(Operation::StopRecording)?;
+    terminal.close()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if _, err := terminal.Run("my-app", nil, tuitest.SpawnOptions{Backend: tuitest.Alacritty}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.StartRecording("demo.gif", tuitest.RecordingOptions{FPS: tuitest.Ptr(uint32(30))}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Continue", tuitest.TextSelectorOptions{}).Click(tuitest.LocatorClickOptions{MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left}, Clicks: tuitest.Ptr(uint32(1))}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Done", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if _, err := terminal.StopRecording(); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Close(); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test run my-app
+    tui-test expect text "Ready"
+    tui-test record start demo.gif --fps 30
+    tui-test click text "Continue"
+    tui-test expect text "Done"
+    tui-test record stop
+    tui-test close
+    ```
+  </TabItem>
+</Tabs>
 
 `record stop` exports the recording. Library stop methods return its path.
 For a script that starts its own shell and records one GIF, use a
@@ -38,10 +140,49 @@ For a script that starts its own shell and records one GIF, use a
 
 ### Pause and resume
 
-```sh
-tui-test record pause
-tui-test record resume
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.pauseRecording();
+    await terminal.resumeRecording();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.pause_recording()
+    await terminal.resume_recording()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.execute(Operation::PauseRecording)?;
+    terminal.execute(Operation::ResumeRecording)?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.PauseRecording(); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.ResumeRecording(); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test record pause
+    tui-test record resume
+    ```
+  </TabItem>
+</Tabs>
 
 Pause excludes subsequent time from APNG, GIF, or MP4 while the terminal keeps
 running. Resume captures the current screen without intermediate paused output
@@ -79,8 +220,6 @@ Media formats round durations to their supported precision.
 
 Output, resize, and viewport changes appear in the next raster sample.
 A state shorter than one sample interval can be missed.
-Exports encode these samples without replay through another emulator.
-Frames remain in memory until export; identical samples are merged.
 
 GIF export rejects timelines above 100,000 encoded frames, including repeated
 frames for long holds. A failed export retains its recovery cast.

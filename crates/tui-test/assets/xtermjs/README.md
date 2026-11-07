@@ -8,5 +8,5 @@
 The bundles are compiled into the binary, so the xterm.js backend needs no
 Node.js at runtime.
 
-See the [xterm.js backend reference](https://tui-test.dev/docs/reference/xtermjs/)
-for Unicode width comparisons, shim behavior, known differences, and updates.
+See the [backend guide](https://tui-test.dev/docs/guides/shells-and-backends/)
+for supported backends and usage.

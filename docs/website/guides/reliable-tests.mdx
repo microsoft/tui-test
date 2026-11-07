@@ -6,6 +6,8 @@ sidebar:
   order: 11
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Isolate sessions
 
 Create a session for each test. Use ephemeral names or the language test
@@ -19,10 +21,63 @@ Wait for text, a title, command completion, or process exit.
 A fixed sleep can expire too early on a busy runner and wastes time on a fast
 one. `wait idle` only establishes that the screen stopped changing.
 
-```js
-await terminal.getByText("Loading").expect({ not: true });
-await terminal.getByText("Continue").click();
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.getByText("Loading").expect({ not: true });
+    await terminal.getByText("Continue").click({ button: "left", clicks: 1 });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.get_by_text("Loading").expect(not_=True)
+    await terminal.get_by_text("Continue").click(button="left", clicks=1)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{LocatorClickOptions, LocatorExpectOptions, MouseButton, MouseOptions};
+
+    terminal
+        .get_by_text("Loading")
+        .expect_with(LocatorExpectOptions {
+            not: true,
+            ..Default::default()
+        })?;
+    terminal
+        .get_by_text("Continue")
+        .click_with(LocatorClickOptions {
+            mouse: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+            clicks: 1,
+            ..Default::default()
+        })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Loading", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{Not: true}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Continue", tuitest.TextSelectorOptions{}).Click(tuitest.LocatorClickOptions{MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left}, Clicks: tuitest.Ptr(uint32(1))}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test expect text "Loading" --not
+    tui-test click text "Continue"
+    ```
+  </TabItem>
+</Tabs>
 
 ## Set the terminal environment explicitly
 

@@ -6,32 +6,169 @@ sidebar:
   order: 3
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Type text and write raw input
 
-```sh
-tui-test type "hello"
-tui-test write "raw input"
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.type("hello");
+    await terminal.write("raw input");
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.type("hello")
+    await terminal.write("raw input")
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.execute(Operation::Write {
+        data: "hello".into(),
+    })?;
+    terminal.execute(Operation::Write {
+        data: "raw input".into(),
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Type("hello"); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Write("raw input"); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test type "hello"
+    tui-test write "raw input"
+    ```
+  </TabItem>
+</Tabs>
 
 `type` enters text. `write` sends raw bytes. These operations do not press Enter.
 The language APIs use `type` / `write`, or `Type` / `Write` in Go.
 
 ## Submit shell commands
 
-```sh
-tui-test submit "echo hello"
-tui-test wait command
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.submit("echo hello");
+    await terminal.waitCommand();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.submit("echo hello")
+    await terminal.wait_command()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.execute(Operation::Submit {
+        data: Some("echo hello".into()),
+    })?;
+    terminal.execute(Operation::WaitCommand { timeout_ms: None })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Submit(tuitest.Ptr("echo hello")); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.WaitCommand(tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test submit "echo hello"
+    tui-test wait command
+    ```
+  </TabItem>
+</Tabs>
 
 `submit` types text and presses Enter. Omit the text to submit the current line.
 For shell command results, wait for command completion before reading output.
 
 ## Named keys and modifiers
 
-```sh
-tui-test key press Ctrl+C
-tui-test key press Escape : w q Enter
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.keyboard.press("Ctrl+C");
+    await terminal.keyboard.press("Escape", ":", "w", "q", "Enter");
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.keyboard.press("Ctrl+C")
+    await terminal.keyboard.press("Escape", ":", "w", "q", "Enter")
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{KeyAction, Operation};
+
+    terminal.execute(Operation::Key {
+        keys: vec!["Ctrl+C".into()],
+        action: KeyAction::Press,
+    })?;
+    terminal.execute(Operation::Key {
+        keys: vec![
+            "Escape".into(),
+            ":".into(),
+            "w".into(),
+            "q".into(),
+            "Enter".into(),
+        ],
+        action: KeyAction::Press,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Keyboard.Press("Ctrl+C"); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Keyboard.Press("Escape", ":", "w", "q", "Enter"); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test key press Ctrl+C
+    tui-test key press Escape : w q Enter
+    ```
+  </TabItem>
+</Tabs>
 
 Named keys include `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`,
 `PageDown`, `Insert`, `Delete`, `Backspace`, `Tab`, `Enter`, `Space`, `Escape`,
@@ -43,22 +180,152 @@ or `Hyper` with `+`.
 `key press` sends a key press. Use separate events when testing an application
 that handles keydown, repetition, or release:
 
-```sh
-tui-test key down Shift+Right
-tui-test key repeat Shift+Right
-tui-test key up Shift+Right
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.keyboard.down("Shift+Right");
+    await terminal.keyboard.repeat("Shift+Right");
+    await terminal.keyboard.up("Shift+Right");
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.keyboard.down("Shift+Right")
+    await terminal.keyboard.repeat("Shift+Right")
+    await terminal.keyboard.up("Shift+Right")
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{KeyAction, Operation};
+
+    terminal.execute(Operation::Key {
+        keys: vec!["Shift+Right".into()],
+        action: KeyAction::Down,
+    })?;
+    terminal.execute(Operation::Key {
+        keys: vec!["Shift+Right".into()],
+        action: KeyAction::Repeat,
+    })?;
+    terminal.execute(Operation::Key {
+        keys: vec!["Shift+Right".into()],
+        action: KeyAction::Up,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Keyboard.Down("Shift+Right"); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Keyboard.Repeat("Shift+Right"); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Keyboard.Up("Shift+Right"); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test key down Shift+Right
+    tui-test key repeat Shift+Right
+    tui-test key up Shift+Right
+    ```
+  </TabItem>
+</Tabs>
 
 Python and JavaScript expose these as `terminal.keyboard` methods.
 `press()` is also available directly on the client.
 
 ## Click text or terminal cells
 
-```sh
-tui-test click text "Continue"
-tui-test mouse click 10 5
-tui-test mouse click --on-text "Continue"
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.getByText("Continue").click({ button: "left", clicks: 1 });
+    await terminal.mouse.click(10, 5, { button: "left" });
+    await terminal.mouse.click(undefined, undefined, { onText: "Continue" });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.get_by_text("Continue").click(button="left", clicks=1)
+    await terminal.mouse.click(10, 5, button="left")
+    await terminal.mouse.click(on_text="Continue")
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{LocatorClickOptions, MouseAction, MouseButton, MouseOptions, Operation};
+
+    terminal
+        .get_by_text("Continue")
+        .click_with(LocatorClickOptions {
+            mouse: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+            clicks: 1,
+            ..Default::default()
+        })?;
+    terminal.execute(Operation::Mouse {
+        action: MouseAction::Click {
+            x: Some(10),
+            y: Some(5),
+            on_text: None,
+            options: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+            clicks: 1,
+        },
+    })?;
+    terminal.execute(Operation::Mouse {
+        action: MouseAction::Click {
+            x: None,
+            y: None,
+            on_text: Some("Continue".into()),
+            options: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+            clicks: 1,
+        },
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Continue", tuitest.TextSelectorOptions{}).Click(tuitest.LocatorClickOptions{MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left}, Clicks: tuitest.Ptr(uint32(1))}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Mouse.Click(tuitest.MouseClickOptions{X: tuitest.Ptr(uint16(10)), Y: tuitest.Ptr(uint16(5)), MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left}}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Mouse.Click(tuitest.MouseClickOptions{OnText: tuitest.Ptr("Continue"), MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left}}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test click text "Continue"
+    tui-test mouse click 10 5
+    tui-test mouse click --on-text "Continue"
+    ```
+  </TabItem>
+</Tabs>
 
 Coordinates are zero-based cells, not pixels.
 Text clicks retry and target the middle cell of a unique selected match.
@@ -66,23 +333,179 @@ Use a locator selection if the label appears more than once.
 
 ## Mouse buttons and modifiers
 
-```sh
-tui-test mouse click 10 5 --button right --ctrl
-tui-test click text "Item" --shift --clicks 2
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.mouse.click(10, 5, { button: "right", ctrl: true });
+    await terminal
+      .getByText("Item")
+      .click({ button: "left", clicks: 2, shift: true });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.mouse.click(10, 5, button="right", ctrl=True)
+    await terminal.get_by_text("Item").click(button="left", clicks=2, shift=True)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{LocatorClickOptions, MouseAction, MouseButton, MouseOptions, Operation};
+
+    terminal.execute(Operation::Mouse {
+        action: MouseAction::Click {
+            x: Some(10),
+            y: Some(5),
+            on_text: None,
+            options: MouseOptions {
+                button: MouseButton::Right,
+                ctrl: true,
+                ..Default::default()
+            },
+            clicks: 1,
+        },
+    })?;
+    terminal
+        .get_by_text("Item")
+        .click_with(LocatorClickOptions {
+            mouse: MouseOptions {
+                button: MouseButton::Left,
+                shift: true,
+                ..Default::default()
+            },
+            clicks: 2,
+            ..Default::default()
+        })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Mouse.Click(tuitest.MouseClickOptions{X: tuitest.Ptr(uint16(10)), Y: tuitest.Ptr(uint16(5)), MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Right, Ctrl: true}}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Item", tuitest.TextSelectorOptions{}).Click(tuitest.LocatorClickOptions{MouseButtonOptions: tuitest.MouseButtonOptions{Button: tuitest.Left, Shift: true}, Clicks: tuitest.Ptr(uint32(2))}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test mouse click 10 5 --button right --ctrl
+    tui-test click text "Item" --shift --clicks 2
+    ```
+  </TabItem>
+</Tabs>
 
 Buttons are `left`, `middle`, or `right`. Button actions accept Alt, Ctrl, and
 Shift modifiers. Clicks also accept a click count.
 
 ## Move, drag, and scroll
 
-```sh
-tui-test mouse move 10 5
-tui-test mouse down 10 5 --button left
-tui-test mouse up 10 5 --button left
-tui-test mouse drag 2 3 12 3
-tui-test mouse scroll down --amount 3
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.mouse.move(10, 5);
+    await terminal.mouse.down(10, 5, { button: "left" });
+    await terminal.mouse.up(10, 5, { button: "left" });
+    await terminal.mouse.drag(2, 3, 12, 3, { button: "left" });
+    await terminal.mouse.scroll("down", { amount: 3 });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.mouse.move(10, 5)
+    await terminal.mouse.down(10, 5, button="left")
+    await terminal.mouse.up(10, 5, button="left")
+    await terminal.mouse.drag(2, 3, 12, 3, button="left")
+    await terminal.mouse.scroll("down", amount=3)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{MouseAction, MouseButton, MouseOptions, Operation};
+
+    terminal.execute(Operation::Mouse {
+        action: MouseAction::Move { x: 10, y: 5 },
+    })?;
+    terminal.execute(Operation::Mouse {
+        action: MouseAction::Down {
+            x: 10,
+            y: 5,
+            options: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+        },
+    })?;
+    terminal.execute(Operation::Mouse {
+        action: MouseAction::Up {
+            x: 10,
+            y: 5,
+            options: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+        },
+    })?;
+    terminal.execute(Operation::Mouse {
+        action: MouseAction::Drag {
+            x1: 2,
+            y1: 3,
+            x2: 12,
+            y2: 3,
+            options: MouseOptions {
+                button: MouseButton::Left,
+                ..Default::default()
+            },
+        },
+    })?;
+    terminal.execute(Operation::Mouse {
+        action: MouseAction::Scroll {
+            direction: "down".into(),
+            amount: 3,
+        },
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Mouse.Move(10, 5); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Mouse.Down(10, 5, tuitest.MouseButtonOptions{Button: tuitest.Left}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Mouse.Up(10, 5, tuitest.MouseButtonOptions{Button: tuitest.Left}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Mouse.Drag(2, 3, 12, 3, tuitest.MouseButtonOptions{Button: tuitest.Left}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Mouse.Scroll(tuitest.Down, 3); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test mouse move 10 5
+    tui-test mouse down 10 5 --button left
+    tui-test mouse up 10 5 --button left
+    tui-test mouse drag 2 3 12 3
+    tui-test mouse scroll down --amount 3
+    ```
+  </TabItem>
+</Tabs>
 
 Mouse wheel input goes to the application. Native history scrolling is separate:
 `scroll up`, `scroll down`, `scroll top`, and `scroll bottom` move tui-test's
@@ -90,9 +513,45 @@ viewport. Return to the live screen before sending mouse input.
 
 ## Resize the terminal
 
-```sh
-tui-test resize 100 40
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.resize(100, 40);
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.resize(100, 40)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.execute(Operation::Resize {
+        cols: 100,
+        rows: 40,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Resize(100, 40); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test resize 100 40
+    ```
+  </TabItem>
+</Tabs>
 
 Resize dimensions are columns and rows. A test can resize before checking a
 responsive terminal layout. Captures use the resulting terminal size.

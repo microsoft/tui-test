@@ -49,7 +49,7 @@ If your shell cannot find `tui-test`, restart the terminal or check that the ins
 
 Library sessions run in your process and do not require the CLI.
 
-<Tabs>
+<Tabs syncKey="example-language">
   <TabItem label="Python">
     Requires Python 3.8 or newer.
 
@@ -100,7 +100,5 @@ Library sessions run in your process and do not require the CLI.
   </TabItem>
 </Tabs>
 
-Go, Python, and JavaScript use the same
-[native adapter](/docs/reference/native-library/) through PureGo, ctypes, and
-Koffi. Set `TUI_TEST_NATIVE_LIBRARY` to an absolute path to select a library
-from the same release or source revision.
+To use an existing native library, set `TUI_TEST_NATIVE_LIBRARY` to its absolute
+path. It must match your language package's release and platform.

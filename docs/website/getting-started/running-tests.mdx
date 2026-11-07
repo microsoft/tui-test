@@ -6,6 +6,8 @@ sidebar:
   order: 4
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Run tests with your language's test runner
 
 The examples in [writing tests](/docs/getting-started/writing-tests/) use the
@@ -22,12 +24,32 @@ Library tests run in-process and do not need a CLI daemon.
 
 ## Run a single test
 
-```sh
-node --test --test-name-pattern="prints Ready" terminal.test.mjs
-python -m unittest test_terminal.TerminalTests.test_ready
-go test -run '^TestTerminal$' ./...
-cargo test terminal_output
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```sh
+    node --test --test-name-pattern="prints Ready" terminal.test.mjs
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```sh
+    python -m unittest test_terminal.TerminalTests.test_ready
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```sh
+    cargo test terminal_output
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```sh
+    go test -run '^TestTerminal$' ./...
+    ```
+  </TabItem>
+</Tabs>
 
 ## Run tests in parallel
 
@@ -48,7 +70,7 @@ backend is Alacritty. A fixed grid is useful when comparing layouts or
 
 Install the shell or application your test launches. Keep native dependencies
 from the same release as the binding. See the [Go runtime requirements](/docs/api/go/#install)
-and [native library reference](/docs/reference/native-library/) for source builds.
+and [contributor guide](/docs/contributing/#build-from-source) for source builds.
 
 ## Run tests in CI
 
@@ -70,18 +92,76 @@ fonts. See [recordings](/docs/tools/recordings/).
 
 Configure traces before starting a terminal. In JavaScript:
 
-```js
-const options = {
-  trace: { mode: "on-failure", directory: "artifacts/traces" },
-  artifacts: {
-    dir: "artifacts/failures",
-    onFailure: "all",
-    includeRecording: true,
-  },
-};
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    const options = {
+      trace: { mode: "on-failure", directory: "artifacts/traces" },
+      artifacts: {
+        dir: "artifacts/failures",
+        onFailure: "all",
+        includeRecording: true,
+      },
+    };
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    options = {
+        "trace": {"mode": "on-failure", "directory": "artifacts/traces"},
+        "artifacts": {
+            "dir": "artifacts/failures",
+            "on_failure": "all",
+            "include_recording": True,
+        },
+    }
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    let context = tui_test::ExecutionContext {
+        trace: Some(tui_test::TraceOptions {
+            mode: tui_test::TraceMode::OnFailure,
+            directory: "artifacts/traces".into(),
+        }),
+        artifact: Some(tui_test::FailureArtifactOptions {
+            directory: "artifacts/failures".into(),
+            mode: tui_test::FailureArtifactMode::All,
+            include_recording: true,
+        }),
+        ..Default::default()
+    };
+    let terminal = terminal.with_execution_context(context);
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    options := tuitest.ClientOptions{
+        Trace: &tuitest.TraceOptions{
+            Mode:      tuitest.TraceOnFailure,
+            Directory: "artifacts/traces",
+        },
+        Artifacts: &tuitest.ArtifactOptions{
+            Dir:              "artifacts/failures",
+            OnFailure:        tuitest.ArtifactAll,
+            IncludeRecording: true,
+        },
+    }
+    terminal, err := tuitest.New("test", options)
+    if err != nil {
+        t.Fatal(err)
+    }
+    t.Cleanup(func() { terminal.CloseQuiet() })
+    ```
+  </TabItem>
+</Tabs>
 
 Pass these options to the client or test helper.
+Rust attaches them through an `ExecutionContext` before opening the session.
 The [trace viewer](/docs/tools/trace-viewer/) reads `trace.html`; automated
 consumers should use `trace.md`, `trace.json`, and `timeline.json`.
 Review output before uploading it: traces may contain terminal text, titles,

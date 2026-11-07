@@ -6,12 +6,63 @@ sidebar:
   order: 10
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Create a baseline
 
-```sh
-tui-test expect text "Ready"
-tui-test expect snapshot main-screen
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.getByText("Ready").expect();
+    await terminal.expectSnapshot("main-screen", {
+      update: false,
+      includeStyle: false,
+      includeTitle: false,
+    });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.get_by_text("Ready").expect()
+    await terminal.expect_snapshot("main-screen", update=False, include_style=False, include_title=False)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.get_by_text("Ready").expect()?;
+    terminal.execute(Operation::Snapshot {
+        name: "main-screen".into(),
+        update: false,
+        include_style: false,
+        include_title: false,
+        cwd: None,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if _, err := terminal.ExpectSnapshot("main-screen", tuitest.SnapshotOptions{Update: false, IncludeStyle: false, IncludeTitle: false}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test expect text "Ready"
+    tui-test expect snapshot main-screen
+    ```
+  </TabItem>
+</Tabs>
 
 If the baseline does not exist, the assertion writes it. Review and commit the
 new file before relying on it in CI.
@@ -24,9 +75,52 @@ application state before capturing the snapshot.
 
 ## Include styles and window titles
 
-```sh
-tui-test expect snapshot main-screen --include-style --include-title
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.expectSnapshot("main-screen", {
+      update: false,
+      includeStyle: true,
+      includeTitle: true,
+    });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.expect_snapshot("main-screen", update=False, include_style=True, include_title=True)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.execute(Operation::Snapshot {
+        name: "main-screen".into(),
+        update: false,
+        include_style: true,
+        include_title: true,
+        cwd: None,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if _, err := terminal.ExpectSnapshot("main-screen", tuitest.SnapshotOptions{Update: false, IncludeStyle: true, IncludeTitle: true}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test expect snapshot main-screen --include-style --include-title
+    ```
+  </TabItem>
+</Tabs>
 
 Python uses `include_style` and `include_title`; JavaScript uses `includeStyle`
 and `includeTitle`. Go uses `SnapshotOptions`.
@@ -56,9 +150,52 @@ intentional application change.
 
 ## Update a baseline
 
-```sh
-tui-test expect snapshot main-screen -u --include-style --include-title
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.expectSnapshot("main-screen", {
+      update: true,
+      includeStyle: true,
+      includeTitle: true,
+    });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.expect_snapshot("main-screen", update=True, include_style=True, include_title=True)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.execute(Operation::Snapshot {
+        name: "main-screen".into(),
+        update: true,
+        include_style: true,
+        include_title: true,
+        cwd: None,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if _, err := terminal.ExpectSnapshot("main-screen", tuitest.SnapshotOptions{Update: true, IncludeStyle: true, IncludeTitle: true}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test expect snapshot main-screen -u --include-style --include-title
+    ```
+  </TabItem>
+</Tabs>
 
 Python and JavaScript accept `update=True` and `update: true`, respectively.
 Go returns `SnapshotPassed`, `SnapshotWritten`, or `SnapshotUpdated`.

@@ -6,11 +6,50 @@ sidebar:
   order: 6
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Session state
 
-```sh
-tui-test state --json
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.state());
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.state())
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    println!("{:?}", terminal.execute(Operation::State)?);
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.State()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test state --json
+    ```
+  </TabItem>
+</Tabs>
 
 `state` returns visible text and terminal dimensions with command, process-exit,
 cursor, mode, mouse-mode, color, timeout, readiness, and bell state.
@@ -25,9 +64,54 @@ Go uses `Text(TextOptions{Full: true})`.
 
 ## Cells, styles, and hyperlinks
 
-```sh
-tui-test cells 0 0 20 2 --json
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.cells(0, 0, 20, 2));
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.cells(0, 0, 20, 2))
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    println!(
+        "{:?}",
+        terminal.execute(Operation::Cells {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 2
+        })?
+    );
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.Cells(0, 0, 20, 2)
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test cells 0 0 20 2 --json
+    ```
+  </TabItem>
+</Tabs>
 
 The arguments are `X Y [W H]` in zero-based terminal cells.
 Cells expose text and style information, including foreground and background
@@ -51,11 +135,68 @@ child's initial directory with `--cwd` or the language's `cwd` option.
 
 ## Cursor and terminal size
 
-```sh
-tui-test get cursor --json
-tui-test get size --json
-tui-test get viewport --json
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.getCursor());
+    console.log(await terminal.getSize());
+    console.log(await terminal.getViewport());
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.get_cursor())
+    print(await terminal.get_size())
+    print(await terminal.get_viewport())
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    println!("{:?}", terminal.execute(Operation::GetCursor)?);
+    println!("{:?}", terminal.execute(Operation::GetSize)?);
+    println!("{:?}", terminal.execute(Operation::GetViewport)?);
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.GetCursor()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    {
+        value, err := terminal.GetSize()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    {
+        value, err := terminal.GetViewport()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test get cursor --json
+    tui-test get size --json
+    tui-test get viewport --json
+    ```
+  </TabItem>
+</Tabs>
 
 The cursor includes position, visibility, shape, and color.
 Cursor state retains application coordinates even while viewing history.

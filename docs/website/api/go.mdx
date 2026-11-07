@@ -6,7 +6,7 @@ sidebar:
   order: 4
 ---
 
-Control, inspect, test, and record terminal apps from Go. The binding runs the Rust engine in your process and does not require the CLI.
+Control, inspect, test, and record terminal apps from Go without the CLI.
 
 ## Install
 
@@ -19,7 +19,7 @@ go get github.com/microsoft/tui-test/bindings/go@v0.1.1
 The repository tag is `bindings/go/v<version>`.
 Released modules contain prebuilt native engines. Users need no Rust compiler,
 Zig, C compiler, CLI, or separate installer.
-Source checkouts do not contain these binaries; see [Build and use](/docs/reference/native-library/#build-and-use).
+For source checkouts, see [building from source](/docs/contributing/#build-from-source).
 
 | OS | Go architectures | Native runtime |
 | --- | --- | --- |
@@ -27,26 +27,14 @@ Source checkouts do not contain these binaries; see [Build and use](/docs/refere
 | macOS | `amd64`, `arm64` | macOS system libraries |
 | Windows | `amd64` | Windows system libraries |
 
-Go downloads all platform archives with the module.
-Each executable embeds compressed archives for its target OS and architecture.
-Linux executables contain both libc variants and select the one that matches the running process.
-Other platforms contain one variant.
-
-On first use, the binding extracts the selected engine into the user cache:
-`tui-test/native/<sha256>/`.
-Later processes verify and reuse the same file.
-The engine stays loaded for the process lifetime.
-There are no runtime downloads.
-
-The cache must permit file creation, hard links, and native library loading.
-For a read-only or restricted environment, use an existing installation as described below.
+The default installation needs a writable user cache.
+For a read-only or restricted environment, use an existing native installation
+as described below.
 
 ### Linux and cross-compilation
 
-PureGo avoids cgo, but it still uses the system dynamic loader and libc.
-Embedding a library does not make the executable statically linked.
-Native glibc builds select the GNU engine. Normal native Alpine builds select the musl engine.
-Neither needs a custom Go build tag.
+Linux executables require the system dynamic loader and libc even with cgo
+disabled. Native glibc and Alpine builds need no custom Go build tag.
 Cgo-enabled applications can require a newer libc than the bundled engine.
 
 Cross-compile for glibc Linux with:
@@ -78,7 +66,6 @@ Use `libtui_test_ffi.dylib` on macOS or `tui_test_ffi.dll` on Windows.
 Use the native archive from the same release and the correct platform.
 This mode needs no extraction cache.
 An invalid override returns an error; it never falls back to the bundled engine.
-The loader checks the ABI version, but that check does not prove an exact source-revision match.
 
 ## Quick start
 

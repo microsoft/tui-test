@@ -1,6 +1,6 @@
 ---
 title: JavaScript and TypeScript
-description: Install and use the JavaScript API, locators, test helpers, and native adapter.
+description: Install and use the JavaScript API, locators, and test helpers.
 editUrl: false
 sidebar:
   order: 3
@@ -16,33 +16,11 @@ npm install @microsoft/tui-test
 
 Node 20+ is supported. The package is ESM only. Bun and Deno support is best effort. Deno 2 needs local `node_modules` and `--allow-ffi`.
 
-Each platform package contains the `tui-test-ffi` shared library.
-The JavaScript adapter uses Koffi to call the same typed C ABI as Go and Python.
-It copies native results before it frees their Rust allocations.
-The library stays loaded until process exit on all supported platforms.
-Native operations can finish after JavaScript worker exit.
-Native thread teardown releases unclaimed task handles and results without canceling operations or closing shared sessions.
-Each binding copy uses its own anonymous Koffi layouts, so copies can share one Koffi module without type-name collisions.
-Koffi supplies its own native addon; this package does not build a separate N-API adapter.
-Keep optional dependencies enabled during installation; they contain the platform binaries for both packages.
-The package needs no CLI.
-Set `TUI_TEST_NATIVE_LIBRARY` to an absolute path to select a library from the same source revision.
-
-From `bindings/js` in a source checkout, run `npm ci`, then `npm run build`.
-Use `npm run build:native:debug` for a debug build.
-These commands build `tui-test-ffi` and put the shared library in `native/`.
-Run `cargo run --locked -p tui-test-bindgen` from the repository root to regenerate the native declarations.
-
-For a distributable GNU Linux build, use:
-
-```sh
-npm run build:native -- --zig --target x86_64-unknown-linux-gnu
-```
-
-This requires Docker and builds the shared engine inside manylinux 2.28.
-The container constrains both Cargo and Ghostty to the supported libc.
-Use `aarch64-unknown-linux-gnu` for ARM64, with Docker emulation on an x86_64 host.
-Musl builds with `--zig` still use the local Rust and Zig toolchains.
+Keep optional dependencies enabled during installation; they include the
+platform binaries. The package does not require the CLI.
+Set `TUI_TEST_NATIVE_LIBRARY` to an absolute path if you need to use an existing
+library from the same release and platform.
+See [building from source](/docs/contributing/#build-from-source) for local builds.
 
 ## Quick start
 

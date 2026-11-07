@@ -6,6 +6,8 @@ sidebar:
   order: 7
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Live screen and history viewport
 
 The native history viewport shows older terminal rows without sending input to
@@ -14,23 +16,141 @@ An offset of zero means the live screen.
 
 ## Read full terminal text
 
-```sh
-tui-test text
-tui-test text --full
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    console.log(await terminal.text({ full: false }));
+    console.log(await terminal.text({ full: true }));
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    print(await terminal.text(full=False))
+    print(await terminal.text(full=True))
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    println!("{:?}", terminal.execute(Operation::Text { full: false })?);
+    println!("{:?}", terminal.execute(Operation::Text { full: true })?);
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    {
+        value, err := terminal.Text(tuitest.TextOptions{Full: false})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    {
+        value, err := terminal.Text(tuitest.TextOptions{Full: true})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test text
+    tui-test text --full
+    ```
+  </TabItem>
+</Tabs>
 
 The first command reads the selected viewport. The second returns retained
 history plus the live screen, regardless of the viewport.
 
 ## Scroll through native history
 
-```sh
-tui-test scroll up 5
-tui-test get viewport --json
-tui-test text
-tui-test scroll down 2
-tui-test scroll top
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.scroll(5);
+    console.log(await terminal.getViewport());
+    console.log(await terminal.text({ full: false }));
+    await terminal.scroll(-2);
+    await terminal.scrollToTop();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.scroll(5)
+    print(await terminal.get_viewport())
+    print(await terminal.text(full=False))
+    await terminal.scroll(-2)
+    await terminal.scroll_to_top()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{Operation, ScrollTarget};
+
+    terminal.execute(Operation::Scroll {
+        target: ScrollTarget::Lines(5),
+    })?;
+    println!("{:?}", terminal.execute(Operation::GetViewport)?);
+    println!("{:?}", terminal.execute(Operation::Text { full: false })?);
+    terminal.execute(Operation::Scroll {
+        target: ScrollTarget::Lines(-2),
+    })?;
+    terminal.execute(Operation::Scroll {
+        target: ScrollTarget::Top,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Scroll(5); err != nil {
+        t.Fatal(err)
+    }
+    {
+        value, err := terminal.GetViewport()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    {
+        value, err := terminal.Text(tuitest.TextOptions{Full: false})
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    if err := terminal.Scroll(-2); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.ScrollToTop(); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test scroll up 5
+    tui-test get viewport --json
+    tui-test text
+    tui-test scroll down 2
+    tui-test scroll top
+    ```
+  </TabItem>
+</Tabs>
 
 The default CLI scroll amount is one row. Amounts range from zero through
 2147483647. Movement stops at history boundaries.
@@ -45,9 +165,44 @@ range. Go preserves full-width `uint64` row counts.
 
 ## Return to the live screen
 
-```sh
-tui-test scroll bottom
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.scrollToBottom();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.scroll_to_bottom()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::{Operation, ScrollTarget};
+
+    terminal.execute(Operation::Scroll {
+        target: ScrollTarget::Bottom,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.ScrollToBottom(); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test scroll bottom
+    ```
+  </TabItem>
+</Tabs>
 
 In the libraries use `scrollToBottom()`, `scroll_to_bottom()`, or
 `ScrollToBottom()`. Corresponding top methods show the oldest retained output.

@@ -6,14 +6,61 @@ sidebar:
   order: 4
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
 ## Text appearing or disappearing
 
 Use a locator to wait for the state your next action needs:
 
-```sh
-tui-test expect text "Ready"
-tui-test expect text "Loading" --not --timeout 10000
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.getByText("Ready").expect();
+    await terminal.getByText("Loading").expect({ not: true, timeout: 10000 });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.get_by_text("Ready").expect()
+    await terminal.get_by_text("Loading").expect(not_=True, timeout=10000)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::LocatorExpectOptions;
+
+    terminal.get_by_text("Ready").expect()?;
+    terminal
+        .get_by_text("Loading")
+        .expect_with(LocatorExpectOptions {
+            not: true,
+            timeout_ms: Some(10000),
+            ..Default::default()
+        })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Loading", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{Not: true, Timeout: tuitest.Ptr(10000 * time.Millisecond)}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test expect text "Ready"
+    tui-test expect text "Loading" --not --timeout 10000
+    ```
+  </TabItem>
+</Tabs>
 
 `expect`, `click`, and `highlight` retry. `find` reads the current screen.
 Library locator waits support visible and hidden states.
@@ -26,12 +73,73 @@ the supported shell's integration.
 
 ## Command completion
 
-```sh
-tui-test submit "echo complete"
-tui-test wait command
-tui-test get output
-tui-test get exit-code
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.submit("echo complete");
+    await terminal.waitCommand();
+    console.log(await terminal.getOutput());
+    console.log(await terminal.getExitCode());
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.submit("echo complete")
+    await terminal.wait_command()
+    print(await terminal.get_output())
+    print(await terminal.get_exit_code())
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.execute(Operation::Submit {
+        data: Some("echo complete".into()),
+    })?;
+    terminal.execute(Operation::WaitCommand { timeout_ms: None })?;
+    println!("{:?}", terminal.execute(Operation::GetOutput)?);
+    println!("{:?}", terminal.execute(Operation::GetExitCode)?);
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.Submit(tuitest.Ptr("echo complete")); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.WaitCommand(tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    {
+        value, err := terminal.GetOutput()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    {
+        value, err := terminal.GetExitCode()
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(value)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test submit "echo complete"
+    tui-test wait command
+    tui-test get output
+    tui-test get exit-code
+    ```
+  </TabItem>
+</Tabs>
 
 Use this sequence for a command submitted to an open shell.
 Command completion and visible text are separate observations.
@@ -50,10 +158,59 @@ command/process wait when one expresses the required condition.
 
 ## Window title
 
-```sh
-tui-test wait title "Editor" --timeout 5000
-tui-test expect title "Loading" --not
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.waitTitle("Editor", { not: false, timeout: 5000 });
+    await terminal.expectTitle("Loading", { not: true });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.wait_title("Editor", not_=False, timeout=5000)
+    await terminal.expect_title("Loading", not_=True)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.execute(Operation::WaitTitle {
+        text: "Editor".into(),
+        regex: false,
+        not: false,
+        timeout_ms: Some(5000),
+    })?;
+    terminal.execute(Operation::ExpectTitle {
+        text: "Loading".into(),
+        regex: false,
+        not: true,
+        timeout_ms: None,
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.WaitTitle("Editor", tuitest.TitleOptions{Not: false, Timeout: tuitest.Ptr(5000 * time.Millisecond)}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.ExpectTitle("Loading", tuitest.TitleOptions{Not: true}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test wait title "Editor" --timeout 5000
+    tui-test expect title "Loading" --not
+    ```
+  </TabItem>
+</Tabs>
 
 Title waits accept regular expressions and negative matching.
 
@@ -62,9 +219,42 @@ Title waits accept regular expressions and negative matching.
 `wait clipboard` with no text waits for the next clipboard change.
 Supply text for a content match or `--regex` for a regular expression.
 
-```sh
-tui-test wait clipboard "copied text" --timeout 5000
-```
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+
+    ```js
+    await terminal.waitClipboard("copied text", { timeout: 5000 });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+
+    ```python
+    await terminal.wait_clipboard("copied text", timeout=5000)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+
+    ```rust
+    use tui_test::Operation;
+
+    terminal.execute(Operation::wait_clipboard_match("copied text", Some(5000)))?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+
+    ```go
+    if err := terminal.WaitClipboard(tuitest.ClipboardWaitOptions{Text: tuitest.Ptr("copied text"), Timeout: tuitest.Ptr(5000 * time.Millisecond)}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+
+    ```sh
+    tui-test wait clipboard "copied text" --timeout 5000
+    ```
+  </TabItem>
+</Tabs>
 
 JavaScript accepts a `RegExp` and preserves its flags. Python accepts a compiled
 text `re.Pattern` with `search()` semantics; bytes patterns are rejected.
