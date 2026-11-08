@@ -21,7 +21,7 @@ import {
 } from "../dist/config.js";
 import { NativeRuntime, mapNativeError } from "../dist/native.js";
 import { resolve } from "node:path";
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 
 const shell = process.platform === "win32" ? "pwsh" : undefined;
 const evalArgs =
@@ -42,6 +42,36 @@ const ALL_TIMEOUT_ENV_VARS = [
 const CLASSES = ["text", "idle", "command", "exit", "ready"];
 
 for (const boundary of ["constructor", "open", "run"]) {
+  test(`public ${boundary} snapshots nested rendering style before asynchronous initialization`, async () => {
+    const directory = resolve("target", uniqueSession("js-style-snapshot"));
+    const style = { fontSize: 24, font: { family: "monospace" } };
+    const terminal = TuiTest.ephemeral("style-snapshot",
+      boundary === "constructor" ? { style } : {});
+    try {
+      mkdirSync(directory, { recursive: true });
+      if (boundary === "constructor") {
+        style.fontSize = 48;
+        style.font.family = "serif";
+      }
+      const options = { waitReady: false, ...(boundary === "constructor" ? {} : { style }) };
+      const pending = boundary === "open"
+        ? terminal.open({ ...options, shell })
+        : terminal.run(process.execPath, evalArgs, options);
+      style.fontSize = 48;
+      style.font.family = "serif";
+      await pending;
+      const path = resolve(directory, "screen.svg");
+      await terminal.screenshot(path);
+      const svg = readFileSync(path, "utf8");
+      assert.match(svg, /font-size="24px"/);
+      assert.match(svg, /font-family="monospace"/);
+      assert.deepEqual(style, { fontSize: 48, font: { family: "serif" } });
+    } finally {
+      await terminal.closeQuiet();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test(`public ${boundary} snapshots recording before asynchronous initialization`, async () => {
     const directory = resolve("target", uniqueSession("js-recording-snapshot"));
     const recording = { directory, mode: "disabled" };

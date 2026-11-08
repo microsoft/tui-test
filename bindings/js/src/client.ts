@@ -789,7 +789,7 @@ export class TuiTest {
     backendPayload(opts.backend);
     profilePayload(opts.profile);
     const artifacts = artifactPayload(opts.artifacts);
-    this.#options = { ...opts };
+    this.#options = { ...opts, style: structuredClone(opts.style) };
     this.#runtime = new NativeRuntime(
       this.session,
       recordingPayload(opts.recording),
@@ -926,7 +926,7 @@ export class TuiTest {
       restart: opts.restart,
       profileScrollback: profile?.scrollback,
       profileColors: profile?.colors,
-      style: opts.style ?? this.#options.style,
+      style: structuredClone(opts.style ?? this.#options.style),
       timeouts: timeoutsPayload(opts.timeouts),
       screenHistoryLimit: this.#options.screenHistoryLimit,
       recording: recordingPayload(opts.recording),
@@ -952,7 +952,7 @@ export class TuiTest {
       restart: opts.restart,
       profileScrollback: profile?.scrollback,
       profileColors: profile?.colors,
-      style: opts.style ?? this.#options.style,
+      style: structuredClone(opts.style ?? this.#options.style),
       timeouts: timeoutsPayload(opts.timeouts),
       screenHistoryLimit: this.#options.screenHistoryLimit,
       recording: recordingPayload(opts.recording),
