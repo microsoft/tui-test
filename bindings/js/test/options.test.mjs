@@ -5,6 +5,7 @@ import {
   ExpectationError,
   NoSessionError,
   TuiTest,
+  getRecording,
   UsageError,
   uniqueSession,
 } from "../dist/index.js";
@@ -20,6 +21,7 @@ import {
 } from "../dist/config.js";
 import { NativeRuntime, mapNativeError } from "../dist/native.js";
 import { resolve } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 
 const shell = process.platform === "win32" ? "pwsh" : undefined;
 const evalArgs =
@@ -39,6 +41,142 @@ const ALL_TIMEOUT_ENV_VARS = [
 
 const CLASSES = ["text", "idle", "command", "exit", "ready"];
 
+for (const boundary of ["constructor", "open", "run"]) {
+  test(`public ${boundary} snapshots nested rendering style before asynchronous initialization`, async () => {
+    const directory = resolve("target", uniqueSession("js-style-snapshot"));
+    const style = { fontSize: 24, font: { family: "monospace" } };
+    const terminal = TuiTest.ephemeral("style-snapshot",
+      boundary === "constructor" ? { style } : {});
+    try {
+      mkdirSync(directory, { recursive: true });
+      if (boundary === "constructor") {
+        style.fontSize = 48;
+        style.font.family = "serif";
+      }
+      const options = { waitReady: false, ...(boundary === "constructor" ? {} : { style }) };
+      const pending = boundary === "open"
+        ? terminal.open({ ...options, shell })
+        : terminal.run(process.execPath, evalArgs, options);
+      style.fontSize = 48;
+      style.font.family = "serif";
+      await pending;
+      const path = resolve(directory, "screen.svg");
+      await terminal.screenshot(path);
+      const svg = readFileSync(path, "utf8");
+      assert.match(svg, /font-size="24px"/);
+      assert.match(svg, /font-family="monospace"/);
+      assert.deepEqual(style, { fontSize: 48, font: { family: "serif" } });
+    } finally {
+      await terminal.closeQuiet();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test(`public ${boundary} snapshots recording before asynchronous initialization`, async () => {
+    const directory = resolve("target", uniqueSession("js-recording-snapshot"));
+    const recording = { directory, mode: "disabled" };
+    const terminal = TuiTest.ephemeral("recording-snapshot",
+      boundary === "constructor" ? { recording } : {});
+    try {
+      const options = { waitReady: false, ...(boundary === "constructor" ? {} : { recording }) };
+      const pending = boundary === "open"
+        ? terminal.open({ ...options, shell })
+        : terminal.run(process.execPath, evalArgs, options);
+      recording.mode = "always";
+      const opened = await pending;
+      assert.equal(opened.recording, "");
+      assert.equal(recording.mode, "always");
+    } finally {
+      await terminal.closeQuiet();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test(`public ${boundary} snapshots nested context before asynchronous initialization`, async () => {
+    const directory = resolve("target", uniqueSession("js-context-snapshot"));
+    const context = {
+      trace: { directory, mode: "on" },
+      diagnosticContext: { suite: "original" },
+    };
+    const terminal = TuiTest.ephemeral("context-snapshot",
+      boundary === "constructor" ? { context } : {});
+    try {
+      const options = { waitReady: false, ...(boundary === "constructor" ? {} : { context }) };
+      const pending = boundary === "open"
+        ? terminal.open({ ...options, shell })
+        : terminal.run(process.execPath, evalArgs, options);
+      context.trace.mode = "off";
+      context.diagnosticContext.suite = "changed";
+      const opened = await pending;
+      assert.notEqual(opened.recording, "");
+      await terminal.finishTrace();
+      const trace = readdirSync(directory).find((name) => name.startsWith("trace-"));
+      assert.ok(trace);
+      const report = JSON.parse(readFileSync(resolve(directory, trace, "trace.json"), "utf8"));
+      assert.equal(report.context.suite, "original");
+      assert.equal(context.trace.mode, "off");
+      assert.equal(context.diagnosticContext.suite, "changed");
+    } finally {
+      await terminal.closeQuiet();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+test("session parity preserves scopes, context, trace completion, and interruption", async () => {
+  const directory = resolve("target", uniqueSession("js-session-parity"));
+  const terminal = TuiTest.ephemeral("session-parity", {
+    context: { operationName: "parity-check", diagnosticContext: { suite: "parity" } },
+  });
+  try {
+    const output = "Start\r\n\x1b[1mSave\x1b[0m plain\r\nEnd\r\n";
+    const args = typeof globalThis.Deno === "undefined"
+      ? ["-e", `process.stdout.write(${JSON.stringify(output)}); process.stdin.resume();`]
+      : ["eval", `Deno.stdout.writeSync(new TextEncoder().encode(${JSON.stringify(output)})); await Deno.stdin.read(new Uint8Array(1));`];
+    const opened = await terminal.run(process.execPath, args, {
+      waitReady: false, recording: { directory },
+      context: { diagnosticContext: { phase: "spawn" }, trace: { mode: "on", directory } },
+    });
+    assert.ok(opened.recording.startsWith(directory));
+    const scope = { after: { text: "Sta.t", regex: true, occurrence: { nth: 0 } }, before: { text: "End" } };
+    const save = terminal.getByText("Save", { scope }).withStyle({ bold: true });
+    scope.after.text = "changed";
+    await save.expect();
+    assert.equal(await terminal.getByText("Save", { scope: { after: undefined, before: { text: "End" } } }).count(), 1);
+    assert.equal(await terminal.getByText("Save plain").withStyle({ bold: true }).count(), 0);
+    assert.equal((await terminal.getByText("Save plain").and(terminal.getByStyle({ bold: true })).location()).text, "Save");
+    assert.equal(await terminal.getByStyle({ bold: true }).withStyle({ bold: false }).count(), 0);
+    assert.equal(await terminal.getByLink("").withStyle({ bold: true }).count(), 0);
+    const relative = save.relativeTo(terminal.getByText("Start"), "after");
+    assert.equal(await relative.count(), 1);
+    assert.equal((await relative.highlightMatches())[0].text, "Save");
+    const composite = relative.or(terminal.getByLink("test:save"));
+    assert.equal(await composite.count(), 1);
+    await assert.rejects(composite.withStyle({ bold: true }).count(), /composition nodes do not accept scope or style/);
+    await assert.rejects(composite.relativeTo(save).count(), /composition nodes do not accept scope or style/);
+    const screen = await terminal.packedScreen();
+    assert.equal(screen.cols, 80);
+    assert.ok(new TextDecoder().decode(screen.utf8).includes("Save"));
+    assert.equal(await terminal.expectSnapshot("parity", { cwd: directory, update: true }), "written");
+    await terminal.finishTrace(false);
+    await terminal.state();
+    const trace = readdirSync(directory).find((name) => name.startsWith("trace-"));
+    const report = JSON.parse(readFileSync(resolve(directory, trace, "trace.json"), "utf8"));
+    assert.equal(report.outcome, "passed");
+    assert.ok(report.recent_operations.some((operation) => operation.name === "parity-check"));
+    assert.equal(report.context.phase, "spawn");
+    assert.equal(report.context.suite, "parity");
+    const pending = assert.rejects(terminal.waitExit({ timeout: 30_000 }), /cancelled/);
+    await terminal.interrupt();
+    await pending;
+    await assert.rejects(terminal.waitExit({ timeout: 0 }), /cancelled/);
+  } finally {
+    await terminal.closeQuiet();
+    rmSync(directory, { recursive: true, force: true });
+  }
+  await assert.rejects(terminal.interrupt(), NoSessionError);
+});
+
 test("invalid capture backgrounds reject with UsageError before session lookup", async () => {
   const terminal = new TuiTest(uniqueSession("invalid-capture-background"));
   for (const background of [
@@ -54,6 +192,30 @@ test("invalid capture backgrounds reject with UsageError before session lookup",
         JSON.stringify(background),
       );
     }
+  }
+});
+
+test("runtime recording mode enables cast-only recording without a trace", async () => {
+  const directory = resolve("target", uniqueSession("js-cast-only"));
+  const defaults = { mode: "disabled", directory };
+  const terminal = TuiTest.ephemeral("cast-only", { recording: defaults });
+  try {
+    const args = typeof globalThis.Deno === "undefined"
+      ? ["-e", "console.log('cast-only'); process.stdin.resume();"]
+      : ["eval", "console.log('cast-only'); await Deno.stdin.read(new Uint8Array(1));"];
+    const opened = await terminal.run(process.execPath, args, {
+      waitReady: false, recording: { mode: "always", directory },
+    });
+    await terminal.getByText("cast-only").expect();
+    assert.ok(opened.recording.startsWith(directory));
+    assert.ok((await getRecording(terminal.session)).includes("cast-only"));
+    await terminal.close();
+    assert.ok((await getRecording(terminal.session)).includes("cast-only"));
+    assert.equal(defaults.mode, "disabled");
+    assert.ok(!readdirSync(directory).some((name) => name.startsWith("trace-")));
+  } finally {
+    await terminal.closeQuiet();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -235,11 +397,14 @@ test("mouse helpers encode named buttons and modifiers", async () => {
   }
 });
 
-test("recordingPayload accepts only a directory", () => {
+test("recordingPayload accepts a directory and runtime recording modes", () => {
   assert.deepEqual(recordingPayload({ directory: "casts" }), {
     directory: "casts",
   });
-  assert.throws(() => recordingPayload({ mode: "always" }), /recording field mode/);
+  for (const mode of ["disabled", "on-failure", "always"]) {
+    assert.deepEqual(recordingPayload({ mode }), { mode });
+  }
+  assert.throws(() => recordingPayload({ mode: "invalid" }), /recording.mode/);
   assert.throws(() => recordingPayload({ directory: "" }), /non-empty/);
   assert.throws(() => recordingPayload({ other: 1 }), /other/);
 });

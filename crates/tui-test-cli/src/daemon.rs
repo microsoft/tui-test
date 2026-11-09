@@ -171,6 +171,12 @@ fn handle_connection(
     if host.stopping.load(Ordering::Acquire) {
         return;
     }
+    if req.is_interrupt() {
+        // Do not queue cancellation behind the operation or startup it must stop.
+        host.engine.interrupt();
+        let _ = ipc::write_response(reader.get_mut(), &Response::ok());
+        return;
+    }
     match req {
         Request::Ping => {
             let _ = ipc::write_response(reader.get_mut(), &Response::ok());

@@ -3,7 +3,9 @@ package native
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
+	"unsafe"
 )
 
 type Session struct {
@@ -39,7 +41,31 @@ func NewSession(name string, options SessionOptions) (*Session, error) {
 	if err != nil {
 		return nil, &Error{Kind: InternalError, Message: "encode native session context: " + err.Error()}
 	}
-	return &Session{name: string(encoded), recording: options.Recording}, nil
+	name, err = mergeContext(string(encoded), options.Context)
+	return &Session{name: name, recording: options.Recording}, err
+}
+
+func mergeContext(name string, context *ExecutionContext) (string, error) {
+	if context == nil {
+		return name, nil
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(name), &values); err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(context)
+	if err != nil {
+		return "", err
+	}
+	var overrides map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &overrides); err != nil {
+		return "", err
+	}
+	for key, value := range overrides {
+		values[key] = value
+	}
+	encoded, err = json.Marshal(values)
+	return string(encoded), err
 }
 
 func checkNativeVersion() error {
@@ -95,7 +121,11 @@ func (runtime *Session) Open(options OpenOptions) (OpenResult, error) {
 		return OpenResult{}, err
 	}
 	memory.pinner.Pin(&converted)
-	result := nativeFunctions.Open(memory.text(runtime.name), &converted)
+	context, err := mergeContext(runtime.name, options.Context)
+	if err != nil {
+		return OpenResult{}, err
+	}
+	result := nativeFunctions.Open(memory.text(context), &converted)
 	defer nativeFunctions.ResultFree(result)
 	return readOpenResult(result)
 }
@@ -109,9 +139,29 @@ func (runtime *Session) Run(program string, args []string, options SpawnOptions)
 	}
 	arguments, length := memory.strings(args)
 	memory.pinner.Pin(&converted)
-	result := nativeFunctions.Run(memory.text(runtime.name), &converted, memory.text(program), arguments, length)
+	context, err := mergeContext(runtime.name, options.Context)
+	if err != nil {
+		return OpenResult{}, err
+	}
+	result := nativeFunctions.Run(memory.text(context), &converted, memory.text(program), arguments, length)
 	defer nativeFunctions.ResultFree(result)
 	return readOpenResult(result)
+}
+
+func (runtime *Session) FinishTrace(failed bool) error {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.FinishTrace(memory.text(runtime.name), failed)
+	defer nativeFunctions.ResultFree(result)
+	return nativeError(result)
+}
+
+func (runtime *Session) Interrupt() error {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.Interrupt(memory.text(runtime.name))
+	defer nativeFunctions.ResultFree(result)
+	return nativeError(result)
 }
 
 func (runtime *Session) State() (State, error) {
@@ -248,6 +298,66 @@ func (runtime *Session) GetBellCount() (uint64, error) {
 		return 0, err
 	}
 	return result.number, nil
+}
+
+func (runtime *Session) GetModes() (map[string]bool, error) {
+	var modes map[string]bool
+	err := runtime.read(func(session abiString, _ *nativeMemory) *abiResult { return nativeFunctions.GetModes(session) },
+		func(result *abiResult) {
+			modes = make(map[string]bool, int(result.modesLen))
+			for _, mode := range unsafe.Slice(result.modes, int(result.modesLen)) {
+				modes[nativeText(mode.name)] = mode.enabled
+			}
+		})
+	return modes, err
+}
+
+func (runtime *Session) GetColors() (TerminalColors, error) {
+	var colors TerminalColors
+	err := runtime.read(func(session abiString, _ *nativeMemory) *abiResult { return nativeFunctions.GetColors(session) },
+		func(result *abiResult) { colors = nativeTerminalColors(result.colors) })
+	return colors, err
+}
+
+func (runtime *Session) ExpectMode(mode string, enabled bool, timeout *time.Duration) error {
+	duration, err := nativeDuration(timeout)
+	if err != nil {
+		return err
+	}
+	return runtime.unit(func(session abiString, memory *nativeMemory) *abiResult {
+		return nativeFunctions.ExpectMode(session, memory.text(mode), enabled, duration)
+	})
+}
+
+func (runtime *Session) ExpectCursor(options CursorExpectation) error {
+	duration, err := nativeDuration(options.Timeout)
+	if err != nil {
+		return err
+	}
+	return runtime.unit(func(session abiString, memory *nativeMemory) *abiResult {
+		return nativeFunctions.ExpectCursor(session, abiCursorExpectation{
+			x: nativeUint(options.X), y: nativeUint(options.Y), visible: nativeBool(options.Visible),
+			shape: memory.optionalText(options.Shape), timeoutMS: duration,
+		})
+	})
+}
+
+func (runtime *Session) ExpectColors(options ColorExpectation) error {
+	duration, err := nativeDuration(options.Timeout)
+	if err != nil {
+		return err
+	}
+	return runtime.unit(func(session abiString, memory *nativeMemory) *abiResult {
+		values := make(map[string]string, len(options.Palette))
+		for index, color := range options.Palette {
+			values[strconv.Itoa(int(index))] = color
+		}
+		palette, length := memory.pairs(values)
+		return nativeFunctions.ExpectColors(session, abiColorExpectation{
+			foreground: memory.optionalText(options.Foreground), background: memory.optionalText(options.Background),
+			cursor: memory.optionalText(options.Cursor), palette: palette, paletteLen: length, timeoutMS: duration,
+		})
+	})
 }
 
 func (runtime *Session) GetBellEvents() ([]BellEvent, error) {
@@ -622,11 +732,36 @@ func (runtime *Session) ClickLocator(expression LocatorExpression, options Locat
 }
 
 func (runtime *Session) HighlightLocator(expression LocatorExpression, timeout *time.Duration) error {
+	_, err := runtime.HighlightMatches(expression, timeout)
+	return err
+}
+
+func (runtime *Session) HighlightMatches(expression LocatorExpression, timeout *time.Duration) ([]TextMatch, error) {
 	duration, err := nativeDuration(timeout)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return runtime.locatorUnit(expression, func(session abiString, query abiQuery) *abiResult {
-		return nativeFunctions.HighlightLocator(session, query, duration)
-	})
+	memory := nativeMemory{}
+	defer memory.release()
+	query, err := memory.query(expression)
+	if err != nil {
+		return nil, err
+	}
+	result := nativeFunctions.HighlightLocator(memory.text(runtime.name), query, duration)
+	defer nativeFunctions.ResultFree(result)
+	if err := nativeError(result); err != nil {
+		return nil, err
+	}
+	return nativeMatches(result), nil
+}
+
+func (runtime *Session) PackedScreen(full bool) (PackedScreen, error) {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.PackedScreen(memory.text(runtime.name), full)
+	defer nativeFunctions.ResultFree(result)
+	if err := nativeError(result); err != nil {
+		return PackedScreen{}, err
+	}
+	return PackedScreen{Cols: result.size.cols, Rows: result.size.rows, UTF8: []byte(nativeText(result.text))}, nil
 }

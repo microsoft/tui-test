@@ -1,0 +1,15 @@
+{
+  "selector": {
+    "kind": "and",
+    "selector": {
+      "left": {
+        "selector": {"kind": "text", "selector": {"text": "Save"}},
+        "within": {"selector": {"kind": "text", "selector": {"text": "Settings"}}},
+        "direction": "after",
+        "style": {"bold": true}
+      },
+      "right": {"selector": {"kind": "link", "selector": {"uri": "test:save"}}}
+    }
+  },
+  "occurrence": "unique"
+}

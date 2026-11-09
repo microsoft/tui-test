@@ -47,6 +47,34 @@ const locator = terminal
 | `expect({ not?, timeout? })` | Assert. |
 | `click(options?)` | Click. |
 | `highlight({ timeout? })` | Highlight. |
+| `withStyle(style)` | Keep whole matches whose visible cells satisfy the style. |
+| `relativeTo(parent, direction?)` | Apply a parent region to a text, style, or link locator. |
+| `highlightMatches({ timeout? })` | Highlight and return the resolved matches. |
+
+`getByText` accepts `scope: { after?, before? }`.
+Each anchor has `text`, optional `regex`, and optional `occurrence`.
+Occurrence defaults to `"unique"` and also accepts `"any"`, `"first"`, `"last"`, or `{ nth: index }`.
+All leaf selectors accept `matchStyle`; `withStyle` supports text, style, and link locators.
+Rust rejects scope or whole-match style on composite nodes.
+Apply these fields to operands before composition.
+`and(terminal.getByStyle(...))` still intersects cells rather than preserving whole matches.
+`relativeTo` requires a parent from the same terminal instance.
+
+Constructor options and `open`/`run` options accept an `ExecutionContext` through `context`.
+Its fields are `operationName`, `diagnosticContext`, `artifacts`, `trace`, and `screenHistoryLimit`.
+Per-call fields apply only to that spawn.
+`open` and `run` also accept `recording: { directory }`.
+Runtime recording options also accept `mode: "disabled" | "on-failure" | "always"` for casts without traces.
+Explicit trace options take precedence. CLI configuration still permits only the recording directory.
+`finishTrace(failed = false)` completes a trace without closing the terminal.
+`interrupt()` cancels pending operations and terminates the child without an operation queue wait.
+It is not a keyboard interrupt; call `close()` afterward.
+Later waits report cancellation until restart or close.
+`packedScreen({ full? })` returns owned `utf8` bytes, `cols`, and `rows`.
+`expectSnapshot(name, { cwd })` selects the working directory for snapshot files.
+
+Run `node bindings/js/examples/parity.mjs` from a built checkout for a complete example.
+See [the binding reference](../bindings/js/README.md#scoped-queries-and-session-context) for recording access and context details.
 
 Text options: `regex`, `full`, `whitespace`, and chained `direction`.
 
@@ -90,7 +118,13 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `expectBellCount()`, `expectSnapshot()` | Assert bells or snapshots. |
 | `screenshot()` | Read text or save SVG or PNG. |
 | `startRecording()`, `pauseRecording()`, `resumeRecording()`, `stopRecording()` | Record output. Pause/resume supports APNG, GIF, and MP4 only. |
+| `getModes()`, `getColors()` | Read native modes and colors. |
+| `expectCursor(options)`, `expectMode(mode, enabled, options?)`, `expectColors(options)` | Poll native state with the text timeout. |
 | `close()`, `closeQuiet()` | Close. |
+
+Set `style` in the constructor, `open()`, or `run()` to control fonts, colors, padding, window controls, borders, shadows, and cursor animation.
+For example, use `style: { cursor: { blink: false, blinkIntervalMs: 250 } }`.
+A per-call style replaces the constructor style. Omitted fields use Rust defaults. Restart preserves the resolved style.
 
 `write(data)` hands the bytes to the terminal, so on Windows they pass through ConPTY input
 translation before the app sees them: a written `\n` arrives as a Ctrl key down followed by
@@ -102,7 +136,7 @@ Capture options: `background` and `transparent` (SVG, APNG, and GIF).
 
 `restart({ gracefulTimeout: 5000 })` returns an `OpenResult`, preserving the last successful spawn's original working directory, options, and latest terminal size. The timeout is milliseconds after Ctrl-C before forced replacement; `0` skips the wait. Child exit preserves restart metadata; `close()` clears it. The terminal and automatic recording start fresh.
 
-Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`, `trace`, and `screenHistoryLimit`.
+Constructor options: `backend`, `timeouts`, `profile`, `style`, `artifacts`, `recording`, `trace`, and `screenHistoryLimit`.
 
 Use `trace: { mode: "on" | "off" | "on-failure", directory: "traces" }`.
 Traces default to `off`. Users can open `trace.html` or replay `session.cast`; agents should read `trace.md`, `trace.json`, and `timeline.json`.

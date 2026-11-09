@@ -1,4 +1,5 @@
 import asyncio
+import ast
 import inspect
 import json
 import unittest
@@ -260,6 +261,21 @@ class NativeSurfaceTests(unittest.TestCase):
 
 
 class NativeStubTests(unittest.TestCase):
+    def test_native_stub_covers_async_methods_and_spawn_arguments(self):
+        directory = Path(__file__).resolve().parents[1] / "src" / "tui_test"
+        methods = []
+        for path in ("_native.py", "_native.pyi"):
+            tree = ast.parse((directory / path).read_text(encoding="utf-8"))
+            session = next(node for node in tree.body
+                           if isinstance(node, ast.ClassDef) and node.name == "NativeSession")
+            methods.append({node.name: node for node in session.body
+                            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and not node.name.startswith("_")})
+        implementation, declarations = methods
+        self.assertFalse(set(implementation) - set(declarations))
+        for name in ("open", "run"):
+            self.assertEqual(len(implementation[name].args.args), len(declarations[name].args.args), name)
+
     def test_cursor_annotations_match_the_native_result(self):
         self.assertEqual(get_type_hints(Cursor), {
             "x": int,

@@ -10,7 +10,7 @@ use tui_test::{
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "tui_test::ScrollTarget")]
@@ -68,9 +68,16 @@ pub enum Request {
         graceful_timeout_ms: u64,
     },
     Close,
+    Interrupt,
+    FinishTrace {
+        failed: bool,
+    },
     Status,
     State,
     Text {
+        full: bool,
+    },
+    PackedScreen {
         full: bool,
     },
     Cells {
@@ -143,6 +150,15 @@ pub enum Request {
     },
     FindLocator {
         query: LocatorQuery,
+    },
+    ResolveLocator {
+        query: LocatorQuery,
+    },
+    WaitLocator {
+        query: LocatorQuery,
+        not: bool,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
     ClickLocator {
         query: LocatorQuery,
@@ -303,6 +319,7 @@ impl Request {
         match self {
             Self::WithContext { request, .. } => request.is_wait(),
             Self::WaitTitle { .. }
+            | Self::WaitLocator { .. }
             | Self::WaitClipboard { .. }
             | Self::WaitIdle { .. }
             | Self::WaitCommand { .. }
@@ -323,10 +340,11 @@ impl Request {
     }
 
     pub fn with_context(self, mut context: ExecutionContext) -> Self {
-        if self.is_close() || self.is_shutdown() {
+        if self.is_close() || self.is_shutdown() || self.is_interrupt() {
             return self;
         }
         if context.artifact.is_none()
+            && context.operation_name.is_none()
             && context.trace.is_none()
             && context.diagnostic_context.is_empty()
             && context.retention == DiagnosticRetentionOptions::default()
@@ -350,9 +368,12 @@ impl Request {
             } => "run",
             Self::Open { .. } => "open",
             Self::Close => "close",
+            Self::Interrupt => "interrupt",
+            Self::FinishTrace { .. } => "trace.finish",
             Self::Status => "status",
             Self::State => "state",
             Self::Text { .. } => "text",
+            Self::PackedScreen { .. } => "packed_screen",
             Self::Cells { .. } => "cells",
             Self::Get { field } => match field {
                 GetField::Command => "get.command",
@@ -385,6 +406,8 @@ impl Request {
             Self::WaitReady { .. } => "wait.ready",
             Self::WaitBell { .. } => "wait.bell",
             Self::FindLocator { .. } => "locator.find",
+            Self::ResolveLocator { .. } => "locator.resolve",
+            Self::WaitLocator { .. } => "locator.wait",
             Self::ClickLocator { .. } => "locator.click",
             Self::HighlightLocator { .. } => "locator.highlight",
             Self::ExpectLocator { .. } => "locator.expect",
@@ -430,6 +453,14 @@ impl Request {
         match self {
             Self::WithContext { request, .. } => request.is_close(),
             Self::Close => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_interrupt(&self) -> bool {
+        match self {
+            Self::WithContext { request, .. } => request.is_interrupt(),
+            Self::Interrupt => true,
             _ => false,
         }
     }
@@ -515,8 +546,10 @@ impl Request {
                 graceful_timeout_ms,
             }),
             Request::Close => Ok(Operation::Close),
+            Request::FinishTrace { failed } => Ok(Operation::FinishTrace { failed }),
             Request::State => Ok(Operation::State),
             Request::Text { full } => Ok(Operation::Text { full }),
+            Request::PackedScreen { full } => Ok(Operation::PackedScreen { full }),
             Request::Cells { x, y, w, h } => Ok(Operation::Cells { x, y, w, h }),
             Request::Get { field } => Ok(match field {
                 GetField::Command => Operation::GetCommand,
@@ -582,6 +615,16 @@ impl Request {
             Request::WaitReady { timeout_ms } => Ok(Operation::WaitReady { timeout_ms }),
             Request::WaitBell { timeout_ms } => Ok(Operation::WaitBell { timeout_ms }),
             Request::FindLocator { query } => Ok(Operation::FindLocator { query }),
+            Request::ResolveLocator { query } => Ok(Operation::ResolveLocator { query }),
+            Request::WaitLocator {
+                query,
+                not,
+                timeout_ms,
+            } => Ok(Operation::WaitLocator {
+                query,
+                not,
+                timeout_ms,
+            }),
             Request::ClickLocator {
                 query,
                 button,
@@ -705,6 +748,7 @@ impl Request {
             Request::PauseRecording => Ok(Operation::PauseRecording),
             Request::ResumeRecording => Ok(Operation::ResumeRecording),
             Request::Ping
+            | Request::Interrupt
             | Request::Status
             | Request::FlushRecording
             | Request::Monitor { .. }
@@ -846,6 +890,93 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
 mod tests {
     use super::*;
     use tui_test::FailureReason;
+
+    #[test]
+    fn session_parity_requests_round_trip_and_map_to_operations() {
+        let query = LocatorQuery::text("Docs").and(LocatorQuery::link("test:docs"));
+        let requests = [
+            Request::PackedScreen { full: true },
+            Request::FinishTrace { failed: true },
+            Request::ResolveLocator {
+                query: query.clone(),
+            },
+            Request::WaitLocator {
+                query: query.clone(),
+                not: true,
+                timeout_ms: Some(23),
+            },
+        ];
+        for request in requests {
+            let name = request.diagnostic_operation_name();
+            let wait = request.is_wait();
+            let decoded: Request =
+                serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
+            let operation = decoded.into_operation().unwrap();
+            assert_eq!(operation.is_wait(), wait);
+            match operation {
+                Operation::PackedScreen { full } => assert!(full),
+                Operation::FinishTrace { failed } => assert!(failed),
+                Operation::ResolveLocator { query: actual } => assert_eq!(actual, query),
+                Operation::WaitLocator {
+                    query: actual,
+                    not,
+                    timeout_ms,
+                } => {
+                    assert_eq!(actual, query);
+                    assert!(not);
+                    assert_eq!(timeout_ms, Some(23));
+                }
+                other => panic!("unexpected operation for {name}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn packed_screen_json_preserves_dimensions_unicode_and_trailing_space() {
+        let text = "é界  \n     \n";
+        let value = operation_data(OperationResult::PackedScreen(tui_test::PackedScreen {
+            cols: 5,
+            rows: 3,
+            utf8: text.as_bytes().to_vec(),
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(value, json!({"cols": 5, "rows": 3, "text": text}));
+        assert_eq!(value["text"].as_str().unwrap().as_bytes(), text.as_bytes());
+    }
+
+    #[test]
+    fn operation_name_alone_retains_the_execution_context() {
+        let wrapped = Request::State.with_context(ExecutionContext {
+            operation_name: Some("checkpoint".into()),
+            ..ExecutionContext::default()
+        });
+        assert!(matches!(wrapped, Request::WithContext { context, .. }
+            if context.operation_name.as_deref() == Some("checkpoint")));
+    }
+
+    #[test]
+    fn interrupt_is_a_direct_control_request_even_with_context() {
+        let request = Request::Interrupt.with_context(ExecutionContext {
+            operation_name: Some("cancel".into()),
+            ..ExecutionContext::default()
+        });
+        assert!(matches!(request, Request::Interrupt));
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(encoded, json!({"kind": "interrupt"}));
+        let decoded: Request = serde_json::from_value(encoded).unwrap();
+        assert!(decoded.is_interrupt());
+        assert!(!decoded.is_wait());
+        assert!(!decoded.is_close());
+        assert!(decoded.into_operation().is_err());
+        let wrapped: Request = serde_json::from_value(json!({
+            "kind": "with_context",
+            "request": {"kind": "interrupt"},
+            "context": {"operation_name": "cancel"}
+        }))
+        .unwrap();
+        assert!(wrapped.is_interrupt());
+    }
 
     #[test]
     fn native_scroll_protocol_preserves_signed_targets_and_viewport_counts() {
@@ -1176,6 +1307,33 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn spawn_protocol_preserves_client_resolved_retention() {
+        let default = DiagnosticRetentionOptions::default().screen_history_limit;
+        for limit in [0, default, 3] {
+            let mut request = make_open_req(None, Timeouts::default());
+            let Request::Open { diagnostics, .. } = &mut request else {
+                unreachable!();
+            };
+            diagnostics.screen_history_limit = limit;
+            let request = request.with_context(ExecutionContext {
+                operation_name: Some("spawn".into()),
+                retention: DiagnosticRetentionOptions {
+                    screen_history_limit: limit,
+                },
+                ..ExecutionContext::default()
+            });
+            let decoded: Request =
+                serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
+            assert_eq!(decoded.diagnostic_retention().screen_history_limit, limit);
+            let Request::WithContext { context, request } = decoded else {
+                panic!("expected context wrapper");
+            };
+            assert_eq!(context.retention.screen_history_limit, limit);
+            assert!(request.is_open());
+        }
     }
 
     #[test]

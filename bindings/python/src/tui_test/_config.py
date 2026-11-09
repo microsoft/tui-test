@@ -119,13 +119,16 @@ def normalize_recording(recording: object) -> Optional[Dict[str, Any]]:
     if recording is None:
         return None
     raw = _object_mapping(recording, "recording")
-    unknown = sorted(set(raw) - {"directory"})
+    unknown = sorted(set(raw) - {"directory", "mode"})
     if unknown:
         raise ValueError(
             "unknown recording field {}".format(
                 ", ".join(repr(name) for name in unknown)
             )
         )
+    mode = raw.get("mode")
+    if mode is not None and mode not in ("disabled", "on-failure", "always"):
+        raise ValueError("recording.mode must be disabled, on-failure, or always")
     directory = raw.get("directory")
     if directory is not None and (
         not isinstance(directory, str) or not directory
