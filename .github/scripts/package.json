@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test release/*.test.mjs"
+    "test": "node --test vendor.test.mjs release/*.test.mjs"
   },
   "dependencies": {
+    "fflate": "^0.8.3",
     "tar": "^7.5.22"
   }
 }

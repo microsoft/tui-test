@@ -1,0 +1,39 @@
+{
+  "package": "Microsoft.Windows.Console.ConPTY",
+  "version": "1.25.260303002-preview",
+  "file_version": "1.25.2603.3002",
+  "source": "https://www.nuget.org/api/v2/package/Microsoft.Windows.Console.ConPTY/1.25.260303002-preview",
+  "package_sha256": "7e477694e4095717c29725f7191ef13a5dda125e3a4d28a5fcc765a13dc9d967",
+  "assets": [
+    {
+      "path": "x86/conpty.dll",
+      "size": 88096,
+      "sha256": "4ed51a79871e12bacc6b69b0117c89aa4d09cb846aaf908545f3d1c98341d3dd"
+    },
+    {
+      "path": "x86/OpenConsole.exe",
+      "size": 1034264,
+      "sha256": "9fde2ccc8515b08172d935dfaeede07d1ad2ec11879e7badff21096eb3d87c74"
+    },
+    {
+      "path": "x64/conpty.dll",
+      "size": 110152,
+      "sha256": "3319b484b80bb53d1f4d0a9eb0ea60fd0f61da69db7280ca43b84215f19245ff"
+    },
+    {
+      "path": "x64/OpenConsole.exe",
+      "size": 1062472,
+      "sha256": "7f68c840226505004215c0b82d4e502c24b5bc3f4b93c4baaaa19bd679c0def8"
+    },
+    {
+      "path": "arm64/conpty.dll",
+      "size": 106528,
+      "sha256": "b3a9f975c51d5b9b96d290bf784e990e3f85203b063c21614457353f566266ff"
+    },
+    {
+      "path": "arm64/OpenConsole.exe",
+      "size": 1110560,
+      "sha256": "7fa560be0c9b6c81db5d1b855a4a6e0f3ee5a2ea75d36eebb3ae44443b8d4866"
+    }
+  ]
+}
