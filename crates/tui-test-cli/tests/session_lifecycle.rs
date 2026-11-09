@@ -2290,6 +2290,95 @@ fn automatic_recording_mode_and_directory_come_from_config() {
 }
 
 #[test]
+fn automatic_recording_modes_work_without_traces() {
+    for mode in ["disabled", "on-failure", "always"] {
+        for failed in [false, true] {
+            let sandbox = Sandbox::new("cast-only");
+            let config = sandbox.home.join("recording.toml");
+            std::fs::write(
+                &config,
+                "[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"off\"\ndirectory = \"traces\"\n",
+            )
+            .unwrap();
+            let mut args = vec!["--json"];
+            if failed {
+                args.extend(["--diagnostic-context", "suite=cast-only"]);
+            }
+            args.extend([
+                "run",
+                "--config",
+                config.to_str().unwrap(),
+                "--recording-mode",
+                mode,
+            ]);
+            args.extend(sleeper());
+            let raw = sandbox.ok(&args);
+            let payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            let path = payload["data"]["recording"].as_str().unwrap();
+            if mode == "disabled" {
+                assert!(path.is_empty());
+                assert_eq!(sandbox.run(&["get-recording"]).status.code(), Some(3));
+            } else {
+                assert!(PathBuf::from(path).starts_with(sandbox.home.join("casts")));
+                assert!(sandbox.ok(&["get-recording"]).contains("\"version\":2"));
+            }
+            sandbox.ok(&["trace", "finish", if failed { "failed" } else { "passed" }]);
+            sandbox.ok(&["close"]);
+            if mode != "disabled" {
+                assert_eq!(PathBuf::from(path).is_file(), mode == "always" || failed);
+            }
+            assert!(!sandbox.home.join("traces").exists());
+        }
+    }
+}
+
+#[test]
+fn automatic_recording_modes_preserve_trace_precedence() {
+    for (trace_mode, context_mode, recording_mode, recorded, traced) in [
+        ("on", None, "disabled", true, true),
+        ("off", Some("off"), "always", false, false),
+        ("off", Some("on-failure"), "disabled", true, true),
+    ] {
+        let sandbox = Sandbox::new("cast-trace-precedence");
+        let config = sandbox.home.join("recording.toml");
+        std::fs::write(
+            &config,
+            format!("[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"{trace_mode}\"\ndirectory = \"traces\"\n"),
+        )
+        .unwrap();
+        let context = sandbox.home.join("context.json");
+        let mut args = vec!["--json"];
+        if let Some(mode) = context_mode {
+            std::fs::write(
+                &context,
+                serde_json::to_vec(&serde_json::json!({
+                    "trace": {"mode": mode, "directory": sandbox.home.join("traces")}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            args.extend(["--context-file", context.to_str().unwrap()]);
+        }
+        args.extend([
+            "open",
+            "--config",
+            config.to_str().unwrap(),
+            "--no-wait-ready",
+            "--recording-mode",
+            recording_mode,
+        ]);
+        let payload: serde_json::Value = serde_json::from_str(&sandbox.ok(&args)).unwrap();
+        assert_eq!(
+            !payload["data"]["recording"].as_str().unwrap().is_empty(),
+            recorded
+        );
+        sandbox.ok(&["trace", "finish", "failed"]);
+        sandbox.ok(&["close"]);
+        assert_eq!(sandbox.home.join("traces").is_dir(), traced);
+    }
+}
+
+#[test]
 fn failed_open_recording_is_readable_before_close() {
     let sandbox = Sandbox::new("recording-failed-open");
     let config = sandbox.home.join("recording.toml");

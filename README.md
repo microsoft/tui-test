@@ -214,7 +214,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | `daemon status` | Show daemon status. |
 | `daemon stop [--all]` | Stop one or all daemons. |
 
-`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, `--timeout-<class> MS`, and `--screen-history-limit COUNT`. `open` also accepts `--shell`.
+`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, `--timeout-<class> MS`, `--screen-history-limit COUNT`, and `--recording-mode disabled|on-failure|always` for automatic casts without traces. `open` also accepts `--shell`.
 
 ### Text locators
 

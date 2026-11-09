@@ -126,6 +126,7 @@ func cloneTimeouts(options Timeouts) Timeouts {
 }
 func cloneClientOptions(options ClientOptions) ClientOptions {
 	options.Timeouts = cloneTimeouts(options.Timeouts)
+	options.Style = cloneRenderStyle(options.Style)
 	options.Profile = clonePointer(options.Profile)
 	if options.Profile != nil {
 		options.Profile.Scrollback = clonePointer(options.Profile.Scrollback)
@@ -135,6 +136,56 @@ func cloneClientOptions(options ClientOptions) ClientOptions {
 	options.Trace = clonePointer(options.Trace)
 	options.ScreenHistoryLimit = clonePointer(options.ScreenHistoryLimit)
 	return options
+}
+func cloneRenderStyle(style *RenderStyle) *RenderStyle {
+	if style == nil {
+		return nil
+	}
+	return &RenderStyle{
+		Font: FontFamilies{
+			Family:     clonePointer(style.Font.Family),
+			Bold:       clonePointer(style.Font.Bold),
+			Italic:     clonePointer(style.Font.Italic),
+			BoldItalic: clonePointer(style.Font.BoldItalic),
+			Files:      append([]string(nil), style.Font.Files...),
+		},
+		FontSize:         clonePointer(style.FontSize),
+		TitleFontSize:    clonePointer(style.TitleFontSize),
+		CanvasBackground: clonePointer(style.CanvasBackground),
+		CanvasPadding:    clonePadding(style.CanvasPadding),
+		ContentPadding:   clonePadding(style.ContentPadding),
+		Window: WindowStyle{
+			TitleBar:      clonePointer(style.Window.TitleBar),
+			TrafficLights: clonePointer(style.Window.TrafficLights),
+			Background:    clonePointer(style.Window.Background),
+			Foreground:    clonePointer(style.Window.Foreground),
+			Divider:       clonePointer(style.Window.Divider),
+		},
+		Border: BorderStyle{
+			Width:  clonePointer(style.Border.Width),
+			Radius: clonePointer(style.Border.Radius),
+			Color:  clonePointer(style.Border.Color),
+		},
+		Shadow: ShadowStyle{
+			Enabled: clonePointer(style.Shadow.Enabled),
+			Color:   clonePointer(style.Shadow.Color),
+			Offset:  clonePointer(style.Shadow.Offset),
+			Spread:  clonePointer(style.Shadow.Spread),
+		},
+		Cursor: RecordingCursorStyle{
+			Blink:           clonePointer(style.Cursor.Blink),
+			BlinkIntervalMS: clonePointer(style.Cursor.BlinkIntervalMS),
+		},
+	}
+}
+func clonePadding(padding Padding) Padding {
+	return Padding{
+		Uniform: clonePointer(padding.Uniform),
+		Top:     clonePointer(padding.Top),
+		Right:   clonePointer(padding.Right),
+		Bottom:  clonePointer(padding.Bottom),
+		Left:    clonePointer(padding.Left),
+	}
 }
 func validateTimeouts(options Timeouts) error {
 	for _, timeout := range []*time.Duration{options.Text, options.Idle, options.Command, options.Exit, options.Ready} {

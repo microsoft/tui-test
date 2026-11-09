@@ -812,7 +812,7 @@ class TuiTest:
         self._backend = cfg.normalize_backend(backend)
         self._timeouts = cfg.normalize_timeouts(timeouts)
         self._profile = cfg.normalize_profile(profile)
-        self._style = style
+        self._style = copy.deepcopy(style)
         self._screen_history_limit = screen_history_limit
         self.keyboard = _Keyboard(self)
         self.mouse = _Mouse(self)
