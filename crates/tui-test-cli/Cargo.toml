@@ -18,7 +18,9 @@ clap = { workspace = true, features = ["env"] }
 crossterm.workspace = true
 dialoguer.workspace = true
 dirs.workspace = true
+ghostty-vt.workspace = true
 interprocess.workspace = true
+portable-pty.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -31,7 +33,15 @@ tui-test = { workspace = true, features = [
 ] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_System_Console", "Win32_System_Pipes"] }
+windows-sys = { workspace = true, features = [
+    "Win32_System_Console",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
+    "Win32_System_SystemInformation",
+] }
+
+[build-dependencies]
+toml.workspace = true
 
 [dev-dependencies]
 gif.workspace = true
