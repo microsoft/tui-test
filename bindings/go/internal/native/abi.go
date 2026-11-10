@@ -6,7 +6,7 @@ import (
 	"unsafe"
 )
 
-const abiVersion = 9
+const abiVersion = 11
 
 type abiString struct {
 	_    structs.HostLayout
@@ -84,6 +84,11 @@ type abiResult struct {
 	snapshot      uint32
 	privateData   unsafe.Pointer
 }
+type abiOptionalProgressBar struct {
+	_       structs.HostLayout
+	present bool
+	value   abiProgressBar
+}
 type abiOpenResult struct {
 	_         structs.HostLayout
 	shellPID  abiOptionalU64
@@ -121,7 +126,7 @@ type abiProgressBar struct {
 }
 type abiState struct {
 	_            structs.HostLayout
-	progressBar  abiProgressBar
+	progressBar  abiOptionalProgressBar
 	sessionShell abiString
 	cols         uint16
 	rows         uint16

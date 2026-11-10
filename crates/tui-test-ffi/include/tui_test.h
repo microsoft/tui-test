@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define ABI_VERSION 9
+#define ABI_VERSION 11
 
 /**
  * A thread-owned asynchronous call. Start, poll, and free it on the same thread.
@@ -67,6 +67,11 @@ typedef struct TuiProgressBar {
   struct TuiOptionalU64 progress;
 } TuiProgressBar;
 
+typedef struct TuiOptionalProgressBar {
+  bool present;
+  struct TuiProgressBar value;
+} TuiOptionalProgressBar;
+
 typedef struct TuiCursor {
   uint16_t x;
   uint16_t y;
@@ -84,7 +89,7 @@ typedef struct TuiTimeouts {
 } TuiTimeouts;
 
 typedef struct TuiState {
-  struct TuiProgressBar progress_bar;
+  struct TuiOptionalProgressBar progress_bar;
   struct TuiString session_shell;
   uint16_t cols;
   uint16_t rows;

@@ -33,7 +33,8 @@ The operation list alone is not sufficient. The following input and output contr
 - A query style filter applies to the whole match. A style-selector intersection does not replace this filter.
 - Diagnostics preserve caller context, artifact settings, trace settings, retention, and failure evidence.
 - Results preserve optional values, terminal attributes, match spans, palette entries, event sequence numbers, and snapshot outcomes.
-- Progress results preserve the OSC 9;4 state and optional percentage. Matches compare only supplied fields and validate percentages from 0 to 100.
+- Ghostty and Rio expose native OSC 9;4 progress. Other backends return usage errors and null snapshot fields.
+- Progress matches compare supplied fields and validate percentages from 0 to 100.
 - Packed screens preserve dimensions, UTF-8 bytes, trailing spaces, and blank rows. Byte offsets are not terminal columns.
 
 ## Equivalent interfaces

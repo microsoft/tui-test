@@ -521,21 +521,9 @@ terminal = TuiTest(
 ### Progress bars
 
 `get_progress_bar()` returns a `ProgressBar` from OSC 9;4 reports.
-Its `state` is `"inactive"`, `"normal"`, `"error"`, `"indeterminate"`, or `"paused"`.
-Its `progress` is a percentage from 0 to 100, or `None` when unavailable.
-`state()` also includes `progress_bar`.
-
-```python
-from tui_test import ProgressBarMatch
-
-await terminal.wait_progress_bar(ProgressBarMatch(state="normal"), timeout=5000)
-await terminal.expect_progress_bar(ProgressBarMatch(progress=50))
-print(await terminal.get_progress_bar())
-```
-
-Only supplied fields participate in a match. An empty match succeeds immediately.
-These methods use the text timeout by default.
-See `examples/progress_bar.py` for a complete example.
+`wait_progress_bar()` and `expect_progress_bar()` compare supplied `ProgressBarMatch` fields and use the text timeout.
+Only Ghostty and Rio support these methods. Other backends raise `UsageError` and expose `progress_bar=None` in snapshots.
+See [application progress](../../README.md#application-progress) for states and a runnable Rust example.
 
 ### Errors
 

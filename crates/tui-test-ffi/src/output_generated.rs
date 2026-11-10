@@ -66,7 +66,13 @@ fn progress_bar(s: &mut Storage, v: tui_test::api::ProgressBar) -> TuiProgressBa
 fn state(s: &mut Storage, v: tui_test::api::State) -> TuiState {
     let modes = s.modes(v.modes);
     TuiState {
-        progress_bar: progress_bar(s, v.progress_bar),
+        progress_bar: TuiOptionalProgressBar {
+            present: v.progress_bar.is_some(),
+            value: v
+                .progress_bar
+                .map(|v| progress_bar(s, v))
+                .unwrap_or_default(),
+        },
         session_shell: s.optional(v.session_shell),
         cols: v.cols,
         rows: v.rows,

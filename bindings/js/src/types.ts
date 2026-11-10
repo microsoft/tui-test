@@ -72,7 +72,7 @@ export interface ProgressBarMatch {
   progress?: number;
 }
 
-export type State = Omit<NativeState, "progress_bar"> & { progress_bar: ProgressBar };
+export type State = Omit<NativeState, "progress_bar"> & { progress_bar: ProgressBar | null };
 
 export type TextMatch = NativeTextMatch;
 

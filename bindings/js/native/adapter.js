@@ -130,8 +130,9 @@ function array(type, pointer, length) {
   return length ? koffi.decode(pointer, types[type], Number(length)).map((value) => decode(type, value)) : [];
 }
 function decode(type, value) {
+  if (!type.startsWith("Tui")) return typeof value === "bigint" ? Number(value) : value;
   if (type === "TuiString") return string(value);
-  if (type.startsWith("TuiOptional")) return value.present ? Number(value.value) : null;
+  if (type.startsWith("TuiOptional")) return value.present ? decode(layouts[type].value, value.value) : null;
   if (type === "TuiColor") {
     if (value.kind === 0) return "default";
     if (value.kind === 1) return value.index;

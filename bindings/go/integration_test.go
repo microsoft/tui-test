@@ -314,6 +314,9 @@ func TestInputAndState(t *testing.T) {
 	terminal := newTerminal(t, tuitest.ClientOptions{})
 	state, err := terminal.State()
 	requireNoError(t, err)
+	if state.ProgressBar != nil {
+		t.Fatalf("unsupported backend progress=%+v", state.ProgressBar)
+	}
 	if state.Cols != 80 || state.Rows != 30 {
 		t.Fatalf("default size=%dx%d", state.Cols, state.Rows)
 	}
@@ -344,7 +347,7 @@ func TestInputAndState(t *testing.T) {
 }
 
 func TestProgressBar(t *testing.T) {
-	terminal := newTerminal(t, tuitest.ClientOptions{Backend: tuitest.Alacritty})
+	terminal := newTerminal(t, tuitest.ClientOptions{Backend: tuitest.Ghostty})
 	initial, err := terminal.GetProgressBar()
 	requireNoError(t, err)
 	if initial.State != tuitest.ProgressInactive || initial.Progress == nil || *initial.Progress != 0 {

@@ -13,7 +13,6 @@ pub mod ghostty;
 pub mod integration;
 pub mod locator;
 pub mod pty;
-pub(crate) mod reports;
 #[cfg(feature = "rio")]
 pub mod rio;
 #[cfg(feature = "xtermjs")]

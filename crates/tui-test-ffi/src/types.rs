@@ -96,6 +96,12 @@ pub struct TuiResult {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+pub struct TuiOptionalProgressBar {
+    pub present: bool,
+    pub value: TuiProgressBar,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub struct TuiOpenResult {
     pub shell_pid: TuiOptionalU64,
     pub session: TuiString,
@@ -138,7 +144,7 @@ pub struct TuiProgressBar {
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct TuiState {
-    pub progress_bar: TuiProgressBar,
+    pub progress_bar: TuiOptionalProgressBar,
     pub session_shell: TuiString,
     pub cols: u16,
     pub rows: u16,

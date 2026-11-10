@@ -10,7 +10,7 @@ use tui_test::{
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "tui_test::ScrollTarget")]

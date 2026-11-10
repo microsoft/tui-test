@@ -111,7 +111,7 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `getCommand()`, `getOutput()`, `getExitCode()` | Read command state. |
 | `getCwd()`, `getCursor()`, `getSize()`, `getTitle()` | Read terminal fields. |
 | `getClipboard()` | Read the session clipboard. |
-| `getProgressBar()` | Read the OSC 9;4 progress state and percentage. |
+| `getProgressBar()` | Read native OSC 9;4 progress on Ghostty or Rio. Other backends raise `UsageError`. |
 | `waitProgressBar(expected, opts)`, `expectProgressBar(expected, opts)` | Compare supplied `state` and `progress` fields; `opts.timeout` overrides the text timeout. |
 | `getBellCount()`, `getBellEvents()` | Read bells. |
 | `waitCommand()`, `waitExit()`, `waitReady()`, `waitIdle()` | Wait for state. |

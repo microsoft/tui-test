@@ -1856,7 +1856,7 @@ fn capture_failure_observation_locked(
         target_arch: std::env::consts::ARCH.to_string(),
     };
     FailureObservation {
-        progress_bar: state.reports.progress_bar(),
+        progress_bar: state.emu.progress_bar(),
         rows: snapshot.rows,
         cols: snapshot.cols,
         title: snapshot.title,
@@ -2138,8 +2138,11 @@ fn dispatch(
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .reports
-                .progress_bar(),
+                .emu
+                .progress_bar()
+                .ok_or_else(|| {
+                    TuiTestError::usage("progress reports are unsupported by this backend")
+                })?,
         )),
         Operation::WaitProgressBar {
             expected,
@@ -2408,7 +2411,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
     let (cols, rows) = state.emu.size();
     let bells = session.bells.snapshot();
     crate::api::State {
-        progress_bar: state.reports.progress_bar(),
+        progress_bar: state.emu.progress_bar(),
         session_shell: session.shell.map(|value| value.as_str().to_string()),
         cols,
         rows,
@@ -4301,14 +4304,15 @@ fn expect_progress_bar(
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .reports
+            .emu
             .progress_bar()
     };
-    let mut actual = current();
+    let mut actual = current()
+        .ok_or_else(|| TuiTestError::usage("progress reports are unsupported by this backend"))?;
     poll_until(
         session,
         || {
-            actual = current();
+            actual = current().expect("backend progress support does not change");
             expected.matches(&actual) || session_stopped(session)
         },
         timeout_ms,

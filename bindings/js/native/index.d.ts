@@ -45,7 +45,7 @@ export interface ProgressBar {
 }
 
 export interface State {
-  progress_bar: ProgressBar
+  progress_bar: ProgressBar | null
   session_shell: string | null
   cols: number
   rows: number

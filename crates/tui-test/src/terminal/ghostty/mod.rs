@@ -270,6 +270,10 @@ impl Emulator for GhosttyEmu {
         self.clipboard_validator.fault()
     }
 
+    fn progress_bar(&self) -> Option<crate::api::ProgressBar> {
+        Some(self.call("reading progress", |core| core.progress_bar()))
+    }
+
     fn take_pending_writes(&mut self) -> Vec<u8> {
         self.call("draining replies", GhosttyCore::take_pending_writes)
     }
@@ -360,6 +364,14 @@ impl Emulator for GhosttyEmu {
 mod tests {
     use super::*;
     use crate::api::KeyAction;
+
+    #[test]
+    fn native_progress_reports() {
+        crate::terminal::conformance::native_progress_reports(
+            &mut GhosttyEmu::new(10, 2, &Profile::default()).unwrap(),
+            true,
+        );
+    }
 
     crate::emulator_conformance_tests!(
         |cols, rows, profile| {

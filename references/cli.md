@@ -263,13 +263,14 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 `size`, `title`, `clipboard`, `bells`, `bell-events`, and `progress-bar`.
 
 `get progress-bar` returns the current `state` and `progress` percentage.
+Only Ghostty and Rio support these operations. Other backends return usage errors.
 States are `inactive`, `normal`, `error`, `indeterminate`, and `paused`.
 Progress is a percentage from 0 to 100, or `null` when unavailable.
 Waits and assertions compare only supplied fields. Both fields are optional.
 They accept `--timeout MS` and use the text timeout by default.
 
 ```sh
-tui-test run python3 -u -c 'import sys; print("\033]9;4;1;50\007", end="", flush=True); sys.stdin.read()'
+tui-test run --backend ghostty python3 -u -c 'import sys; print("\033]9;4;1;50\007", end="", flush=True); sys.stdin.read()'
 tui-test wait progress-bar --state normal
 tui-test expect progress-bar --progress 50
 tui-test get progress-bar

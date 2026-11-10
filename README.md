@@ -172,7 +172,8 @@ func main() {
 
 ## Application progress
 
-All four backends expose application progress from [OSC 9;4](https://ghostty.org/docs/vt/osc/conemu).
+Ghostty and Rio expose native application progress from [OSC 9;4](https://ghostty.org/docs/vt/osc/conemu).
+Alacritty and xterm.js return unsupported usage errors for progress getters, waits, and assertions.
 The report does not draw a widget or change terminal text.
 
 ```sh
@@ -185,16 +186,15 @@ In Rust, use `Operation::GetProgressBar`, `Operation::WaitProgressBar`, or
 `Operation::ExpectProgressBar` with a `ProgressBarMatch`.
 Only supplied fields participate in a match.
 Waits accept an already-matched state and use the text timeout by default.
-Session state and failure diagnostics include `progress_bar`.
+Session state and failure diagnostics include `progress_bar`, or `null` for unsupported backends.
 
 The initial state is `inactive` with progress `0`.
 Error and paused reports retain the previous percentage if they omit it.
 Indeterminate reports retain the percentage but do not indicate definite progress.
-A full reset clears progress; a soft reset or screen switch does not.
-There is no expiration timer. Reports remain until another report or full reset.
-Malformed reports leave the previous state unchanged.
+Native callbacks determine accepted syntax and reset behavior. There is no shared escape parser or expiration timer.
+Ghostty clears progress on a full reset. Rio retains it until another progress report.
 
-Run the portable example against every enabled backend:
+Run the example against both supported backends:
 
 ```sh
 cargo run -p tui-test-rs --example progress_bar --all-features

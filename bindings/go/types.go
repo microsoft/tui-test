@@ -354,7 +354,7 @@ type State struct {
 	Exited                  *int32
 	Ready                   bool
 	BellCount               uint64
-	ProgressBar             ProgressBar
+	ProgressBar             *ProgressBar
 	Modes                   map[string]bool
 	MouseMode               string
 	Colors                  TerminalColors

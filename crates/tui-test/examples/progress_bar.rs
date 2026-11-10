@@ -58,7 +58,7 @@ fn demonstrate(backend: Backend) -> Result<()> {
             let OperationResult::State(snapshot) = session.execute(Operation::State)? else {
                 bail!("unexpected state result");
             };
-            ensure!(snapshot.progress_bar == actual);
+            ensure!(snapshot.progress_bar == Some(actual));
             println!(
                 "{}: {} {}%",
                 backend.as_str(),
@@ -91,7 +91,10 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
-    for &backend in Backend::ALL {
+    for &backend in Backend::ALL
+        .iter()
+        .filter(|backend| matches!(backend.as_str(), "ghostty" | "rio"))
+    {
         demonstrate(backend)?;
     }
     Ok(())
