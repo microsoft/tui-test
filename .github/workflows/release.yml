@@ -70,7 +70,7 @@ jobs:
         run: cargo publish --locked --package tui-test-rs --dry-run
 
   build-cli:
-    needs: verify
+    needs: [verify, build-native]
     if: github.event_name == 'push'
     strategy:
       matrix:
@@ -134,12 +134,40 @@ jobs:
         run: |
           Compress-Archive -Path "target/${{ matrix.target }}/release/tui-test.exe" -DestinationPath "tui-test-${{ matrix.target }}.zip"
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - run: npm ci --prefix .github/scripts --ignore-scripts
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: c-sdk-${{ matrix.target }}
+          path: target/c-sdk-packages
+
+      - name: Pack CLI with C SDK
+        shell: bash
+        run: |
+          executable=tui-test
+          if [[ "${{ matrix.target }}" == *windows* ]]; then executable=tui-test.exe; fi
+          node .github/scripts/release/package-c-sdk.mjs \
+            --target "${{ matrix.target }}" \
+            --sdk "target/c-sdk-packages/tui-test-c-sdk-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" \
+            --cli "target/${{ matrix.target }}/release/$executable" \
+            --output target/c-sdk-bundles
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tui-test-${{ matrix.target }}
           path: |
             tui-test-*.tar.gz
             tui-test-*.zip
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: c-sdk-bundle-${{ matrix.target }}
+          path: target/c-sdk-bundles/*
+          if-no-files-found: error
 
   build-native:
     needs: verify
@@ -230,6 +258,19 @@ jobs:
           node .github/scripts/release/package-native.mjs native \
             --library "target/${{ matrix.target }}/release/$library" \
             --target "${{ matrix.target }}"
+          import_library=()
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            import_library=(--import-library "target/${{ matrix.target }}/release/tui_test_ffi.dll.lib")
+          fi
+          node .github/scripts/release/package-c-sdk.mjs \
+            --library "target/${{ matrix.target }}/release/$library" \
+            --target "${{ matrix.target }}" "${import_library[@]}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: c-sdk-${{ matrix.target }}
+          path: target/c-sdk-packages/*
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -245,6 +286,50 @@ jobs:
             bindings/js/native/*.dylib
             bindings/js/native/*.dll
           if-no-files-found: error
+
+  test-c-sdk:
+    needs: build-native
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - run: npm ci --prefix .github/scripts --ignore-scripts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: c-sdk-${{ matrix.target }}
+          path: target/c-sdk-packages
+      - name: Compile and run relocated C and C++ consumers
+        shell: bash
+        run: |
+          archive="target/c-sdk-packages/tui-test-c-sdk-${RELEASE_TAG}-${{ matrix.target }}.tar.gz"
+          if [[ "${{ matrix.target }}" == *musl ]]; then
+            docker run --rm -v "$PWD:/work" -w /work alpine:3.23 \
+              sh -ec 'apk add --no-cache build-base cmake nodejs; node .github/scripts/test-c-sdk.mjs --archive "$1"' -- "$archive"
+          else
+            node .github/scripts/test-c-sdk.mjs --archive "$archive"
+          fi
 
   package-node:
     needs: build-native
@@ -658,6 +743,7 @@ jobs:
       - package-node
       - package-go
       - build-python
+      - test-c-sdk
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
@@ -673,6 +759,12 @@ jobs:
         with:
           path: artifacts
           pattern: native-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          pattern: c-sdk-*
           merge-multiple: true
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
