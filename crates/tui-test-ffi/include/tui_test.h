@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define ABI_VERSION 7
+#define ABI_VERSION 8
 
 /**
  * A thread-owned asynchronous call. Start, poll, and free it on the same thread.
@@ -283,6 +283,7 @@ typedef struct TuiOpenOptions {
   struct TuiTimeouts timeouts;
   struct TuiString recording_mode;
   struct TuiString recording_directory;
+  struct TuiString recording_format;
   struct TuiStyle style;
 } TuiOpenOptions;
 

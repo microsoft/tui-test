@@ -6,7 +6,7 @@ import (
 	"unsafe"
 )
 
-const abiVersion = 7
+const abiVersion = 8
 
 type abiString struct {
 	_    structs.HostLayout
@@ -266,6 +266,7 @@ type abiOpenOptions struct {
 	timeouts           abiTimeouts
 	recordingMode      abiString
 	recordingDirectory abiString
+	recordingFormat    abiString
 	style              abiStyle
 }
 type abiMouseOptions struct {

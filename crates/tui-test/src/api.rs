@@ -23,10 +23,17 @@ pub struct AutomaticRecording {
     #[serde(skip)]
     pub mode: AutomaticRecordingMode,
     pub directory: Option<PathBuf>,
+    /// Automatic cast format; omitted values use asciicast v2.
+    pub format: Option<RecordingFormat>,
 }
 
 impl AutomaticRecording {
     pub fn validate(&self) -> Result<(), TuiTestError> {
+        if self.format.is_some_and(|format| !format.is_cast()) {
+            return Err(TuiTestError::usage(
+                "automatic recording format must be cast or cast3",
+            ));
+        }
         if self
             .directory
             .as_ref()
@@ -1219,6 +1226,7 @@ pub enum RecordingFormat {
     Gif,
     Mp4,
     Cast,
+    Cast3,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1240,6 +1248,10 @@ impl CaptureBackground {
 }
 
 impl RecordingFormat {
+    pub(crate) fn is_cast(self) -> bool {
+        matches!(self, Self::Cast | Self::Cast3)
+    }
+
     pub fn infer(path: &str) -> Option<Self> {
         let extension = std::path::Path::new(path)
             .extension()?

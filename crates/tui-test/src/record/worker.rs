@@ -92,6 +92,7 @@ pub(super) fn worker_loop(
                         request.rows,
                         &request.env,
                         at,
+                        request.format,
                         protected,
                     )
                 })();
@@ -123,7 +124,7 @@ pub(super) fn worker_loop(
                     let _ = reply.send(Err(CaptureError::NotActive));
                     continue;
                 };
-                if recording.request.format == crate::api::RecordingFormat::Cast {
+                if recording.request.format.is_cast() {
                     let _ = reply.send(Err(CaptureError::UnsupportedPauseResume));
                     continue;
                 }
@@ -145,7 +146,7 @@ pub(super) fn worker_loop(
                     let _ = reply.send(Err(CaptureError::NotActive));
                     continue;
                 };
-                if recording.request.format == crate::api::RecordingFormat::Cast {
+                if recording.request.format.is_cast() {
                     let _ = reply.send(Err(CaptureError::UnsupportedPauseResume));
                     continue;
                 }

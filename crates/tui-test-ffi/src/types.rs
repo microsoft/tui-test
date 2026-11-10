@@ -297,6 +297,7 @@ pub struct TuiOpenOptions {
     pub timeouts: TuiTimeouts,
     pub recording_mode: TuiString,
     pub recording_directory: TuiString,
+    pub recording_format: TuiString,
     pub style: TuiStyle,
 }
 /// button: 0 left, 1 middle, 2 right.

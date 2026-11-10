@@ -118,6 +118,7 @@ fn options(mode: &str) -> RunOptions {
         recording: AutomaticRecording {
             mode: AutomaticRecordingMode::Disabled,
             directory: None,
+            format: None,
         },
     }
 }

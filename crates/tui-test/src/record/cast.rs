@@ -12,6 +12,7 @@ const WIN32_INPUT_MODE: &[u8] = b"\x1b[?9001h";
 
 pub(crate) struct CastWriter {
     start: Instant,
+    format: crate::api::RecordingFormat,
     path: PathBuf,
     sink: BufWriter<File>,
     last_committed: Option<Duration>,
@@ -24,8 +25,9 @@ impl CastWriter {
         rows: u16,
         env: &[(String, String)],
         start: Instant,
+        format: crate::api::RecordingFormat,
     ) -> io::Result<Self> {
-        Self::create_guarded(path, cols, rows, env, start, None)
+        Self::create_guarded(path, cols, rows, env, start, format, None)
     }
 
     pub(super) fn create_guarded(
@@ -34,6 +36,7 @@ impl CastWriter {
         rows: u16,
         env: &[(String, String)],
         start: Instant,
+        format: crate::api::RecordingFormat,
         protected: Option<&super::path::ProtectedFile>,
     ) -> io::Result<Self> {
         if let Some(protected) = protected {
@@ -58,6 +61,7 @@ impl CastWriter {
         sink.set_len(0)?;
         let mut writer = Self {
             start,
+            format,
             path: path.to_path_buf(),
             sink: BufWriter::new(sink),
             last_committed: None,
@@ -99,24 +103,42 @@ impl CastWriter {
             .iter()
             .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
             .collect::<serde_json::Map<String, serde_json::Value>>();
-        serde_json::to_writer(
-            &mut self.sink,
-            &serde_json::json!({
+        let header = if self.format == crate::api::RecordingFormat::Cast3 {
+            let mut term = serde_json::json!({"cols": cols, "rows": rows});
+            if let Some(kind) = env.get("TERM") {
+                term["type"] = kind.clone();
+            }
+            serde_json::json!({
+                "version": 3,
+                "term": term,
+                "timestamp": timestamp,
+                "env": env,
+            })
+        } else {
+            serde_json::json!({
                 "version": 2,
                 "width": cols,
                 "height": rows,
                 "timestamp": timestamp,
                 "env": env,
-            }),
-        )
-        .map_err(json_error)?;
+            })
+        };
+        serde_json::to_writer(&mut self.sink, &header).map_err(json_error)?;
         self.sink.write_all(b"\n")?;
         self.sink.flush()
     }
 
     fn write_event(&mut self, at: Instant, code: &str, data: &str) -> io::Result<()> {
-        let elapsed = at.saturating_duration_since(self.start);
-        serde_json::to_writer(&mut self.sink, &(elapsed.as_secs_f64(), code, data))
+        let mut elapsed = at.saturating_duration_since(self.start);
+        let time = if self.format == crate::api::RecordingFormat::Cast3 {
+            let previous = self.last_committed.unwrap_or_default();
+            // A decoder tail can retain a timestamp from before the last resize.
+            elapsed = elapsed.max(previous);
+            elapsed - previous
+        } else {
+            elapsed
+        };
+        serde_json::to_writer(&mut self.sink, &(time.as_secs_f64(), code, data))
             .map_err(json_error)?;
         self.sink.write_all(b"\n")?;
         self.sink.flush()?;
@@ -337,6 +359,108 @@ fn json_error(error: serde_json::Error) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cast_versions_preserve_output_and_encode_distinct_headers_and_times() {
+        use crate::api::RecordingFormat;
+        for format in [RecordingFormat::Cast, RecordingFormat::Cast3] {
+            let path = std::env::temp_dir().join(format!(
+                "tui-test-cast-times-{}-{format:?}.cast",
+                std::process::id()
+            ));
+            let start = Instant::now();
+            let mut writer = CastWriter::create(
+                &path,
+                80,
+                24,
+                &[("TERM".into(), "xterm-256color".into())],
+                start,
+                format,
+            )
+            .unwrap();
+            writer
+                .write_output(start + Duration::from_millis(250), "first\r\n")
+                .unwrap();
+            writer
+                .write_resize(start + Duration::from_millis(1500), 90, 30)
+                .unwrap();
+            writer
+                .write_output(start + Duration::from_millis(1500), "\x1b[31mred")
+                .unwrap();
+            writer
+                .write_output(start + Duration::from_secs(3), "last")
+                .unwrap();
+            assert_eq!(writer.last_committed(), Some(Duration::from_secs(3)));
+            drop(writer);
+            let cast = std::fs::read_to_string(&path).unwrap();
+            std::fs::remove_file(path).unwrap();
+            let lines: Vec<serde_json::Value> = cast
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let expected = if format == RecordingFormat::Cast {
+                assert_eq!(lines[0]["version"], 2);
+                assert_eq!(lines[0]["width"], 80);
+                assert_eq!(lines[0]["height"], 24);
+                [0.25, 1.5, 1.5, 3.0]
+            } else {
+                assert_eq!(lines[0]["version"], 3);
+                assert_eq!(
+                    lines[0]["term"],
+                    serde_json::json!({
+                        "cols": 80, "rows": 24, "type": "xterm-256color"
+                    })
+                );
+                assert!(lines[0].get("width").is_none());
+                [0.25, 1.25, 0.0, 1.5]
+            };
+            for (event, time) in lines[1..].iter().zip(expected) {
+                assert_eq!(event[0], time);
+            }
+            assert_eq!(lines[1][2], "first\r\n");
+            assert_eq!(lines[2][1], "r");
+            assert_eq!(lines[2][2], "90x30");
+            assert_eq!(lines[3][2], "\x1b[31mred");
+        }
+    }
+
+    #[test]
+    fn cast3_decoder_tail_does_not_move_time_back_before_a_resize() {
+        let path =
+            std::env::temp_dir().join(format!("tui-test-cast3-tail-{}.cast", std::process::id()));
+        let start = Instant::now();
+        let mut writer = CastWriter::create(
+            &path,
+            80,
+            24,
+            &[],
+            start,
+            crate::api::RecordingFormat::Cast3,
+        )
+        .unwrap();
+        writer
+            .write_resize(start + Duration::from_secs(2), 90, 30)
+            .unwrap();
+        writer
+            .write_output(start + Duration::from_secs(1), "\u{fffd}")
+            .unwrap();
+        writer
+            .write_output(start + Duration::from_secs(3), "next")
+            .unwrap();
+        drop(writer);
+        let cast = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let intervals: Vec<f64> = cast
+            .lines()
+            .skip(1)
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line).unwrap()[0]
+                    .as_f64()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(intervals, [2.0, 0.0, 1.0]);
+    }
 
     #[test]
     fn scrollback_cast_seed_preserves_the_live_screen() {

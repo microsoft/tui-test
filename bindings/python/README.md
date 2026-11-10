@@ -294,6 +294,11 @@ Asciicast remains a timestamped output stream; FPS sampling does not change it.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `format` overrides it.
 
+Use `format="cast"` for asciicast v2 or `format="cast3"` for v3.
+Both use `.cast` files; extension inference still selects v2.
+Constructor and spawn options accept `recording=AutomaticRecording(format="cast3")` for automatic recordings.
+Selecting a format does not enable recording.
+
 ### Rendering settings
 
 Pass a `RenderStyle` to the client constructor, `open()`, or `run()`. It supports fonts, colors, padding, window controls, borders, shadows, and cursor animation.

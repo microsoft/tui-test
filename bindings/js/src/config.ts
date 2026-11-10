@@ -142,7 +142,7 @@ export function recordingPayload(
   }
   const raw = profileObject(recording, "recording");
   const unknown = Object.keys(raw).filter(
-    (key) => key !== "directory" && key !== "mode",
+    (key) => key !== "directory" && key !== "mode" && key !== "format",
   );
   if (unknown.length > 0) {
     throw new TypeError(`unknown recording field ${unknown.join(", ")}`);
@@ -152,6 +152,11 @@ export function recordingPayload(
     (typeof raw.mode !== "string" || !["disabled", "on-failure", "always"].includes(raw.mode))
   ) {
     throw new TypeError("recording.mode must be disabled, on-failure, or always");
+  }
+  if (
+    raw.format !== undefined && raw.format !== "cast" && raw.format !== "cast3"
+  ) {
+    throw new TypeError("recording.format must be cast or cast3");
   }
   if (
     raw.directory !== undefined &&

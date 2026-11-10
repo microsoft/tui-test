@@ -405,6 +405,10 @@ test("recordingPayload accepts a directory and runtime recording modes", () => {
     assert.deepEqual(recordingPayload({ mode }), { mode });
   }
   assert.throws(() => recordingPayload({ mode: "invalid" }), /recording.mode/);
+  for (const format of ["cast", "cast3"]) {
+    assert.deepEqual(recordingPayload({ format }), { format });
+  }
+  assert.throws(() => recordingPayload({ format: "gif" }), /recording.format/);
   assert.throws(() => recordingPayload({ directory: "" }), /non-empty/);
   assert.throws(() => recordingPayload({ other: 1 }), /other/);
 });

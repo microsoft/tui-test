@@ -162,13 +162,16 @@ pub(crate) unsafe fn capture_background(
 ) -> Result<Option<CaptureBackground>> {
     crate::session::capture_background(unsafe { background.optional()? }, transparent)
 }
-pub(crate) unsafe fn recording(value: TuiRecordingOptions) -> Result<Operation> {
-    let format = unsafe { value.format.optional()? }
+unsafe fn recording_format(value: TuiString) -> Result<Option<RecordingFormat>> {
+    unsafe { value.optional()? }
         .map(|s| {
             serde_json::from_value(s.into())
                 .map_err(|_| TuiTestError::usage("unknown recording format"))
         })
-        .transpose()?;
+        .transpose()
+}
+pub(crate) unsafe fn recording(value: TuiRecordingOptions) -> Result<Operation> {
+    let format = unsafe { recording_format(value.format)? };
     let fps = value
         .fps
         .option()

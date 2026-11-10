@@ -98,6 +98,7 @@ export interface Profile {
 export interface AutomaticRecording {
   mode?: "disabled" | "on-failure" | "always";
   directory?: string;
+  format?: "cast" | "cast3";
 }
 
 export interface TraceOptions {

@@ -787,6 +787,9 @@ impl Engine {
             self.logger.clone(),
             recording_path.clone(),
             recording_required,
+            recording
+                .format
+                .unwrap_or(crate::api::RecordingFormat::Cast),
         )
         .map_err(|error| TuiTestError::internal(format!("failed to open session: {error}")))?;
         {
@@ -4547,6 +4550,7 @@ mod tests {
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::Disabled,
                 directory: None,
+                format: None,
             },
         }
     }
@@ -5755,6 +5759,7 @@ mod tests {
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::Disabled,
                 directory: None,
+                format: None,
             },
         };
 
