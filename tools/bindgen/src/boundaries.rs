@@ -181,6 +181,9 @@ fn c_type(ty: &str) -> Result<String> {
         "CellColor" => "TuiColor".into(),
         "bool" | "u16" | "u32" | "u64" | "u8" | "f64" | "i32" | "usize" => ty.into(),
         t if OUTPUTS.contains(&t) || t == "Timeouts" => c_name(t),
+        t if option(t).is_some_and(|inner| OUTPUTS.contains(&inner)) => {
+            format!("TuiOptional{}", option(t).unwrap())
+        }
         _ => bail!("no C mapping for {ty}"),
     })
 }
@@ -194,11 +197,25 @@ fn c_output(ty: &str, value: &str) -> Result<String> {
         "Option<ProgramStatusKind>" => format!("s.optional({value}.map(|v| v.as_str().to_owned()))"),
         "CellColor" => format!("color({value})"),
         t if OUTPUTS.contains(&t) => format!("{}(s, {value})", snake(t)),
+        t if option(t).is_some_and(|inner| OUTPUTS.contains(&inner)) => {
+            let inner = option(t).unwrap();
+            format!("TuiOptional{inner} {{ present: {value}.is_some(), value: {value}.map(|v| {}(s, v)).unwrap_or_default() }}", snake(inner))
+        }
         _ => { c_type(ty)?; value.into() }
     })
 }
 
 fn output_models(models: &Models, c: &mut String, cc: &mut String) -> Result<()> {
+    let mut optional = std::collections::BTreeSet::new();
+    for &model in OUTPUTS {
+        for field in models.fields(model)? {
+            if let Some(inner) = option(&field.ty).filter(|inner| OUTPUTS.contains(inner)) {
+                if optional.insert(inner.to_owned()) {
+                    writeln!(c, "#[repr(C)] #[derive(Clone,Copy,Default)] pub struct TuiOptional{inner} {{ pub present: bool, pub value: {} }}", c_name(inner))?;
+                }
+            }
+        }
+    }
     for &model in OUTPUTS {
         if model == "PackedScreen" {
             continue;
@@ -717,6 +734,15 @@ pub(crate) mod tests {
         output_models(&models, &mut c, &mut cc).unwrap();
         assert!(c.contains("pub generation_probe: bool"));
         assert!(cc.contains("generation_probe: v.generation_probe"));
+        models
+            .parse("struct Cursor { optional_size: Option<Size> }")
+            .unwrap();
+        let (mut c, mut cc) = Default::default();
+        output_models(&models, &mut c, &mut cc).unwrap();
+        assert!(c.contains("pub struct TuiOptionalSize"));
+        assert!(c.contains("pub optional_size: TuiOptionalSize"));
+        assert!(cc.contains("present: v.optional_size.is_some()"));
+        assert!(cc.contains("v.optional_size.map(|v| size(s, v)).unwrap_or_default()"));
         models
             .parse("struct Cursor { unsupported: Unknown }")
             .unwrap();

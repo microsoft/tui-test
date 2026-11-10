@@ -396,7 +396,7 @@ pub struct TerminalDiagnostics {
     #[serde(default)]
     pub program_statuses: Option<Vec<crate::api::ProgramStatus>>,
     #[serde(default)]
-    pub progress_bar: crate::api::ProgressBar,
+    pub progress_bar: Option<crate::api::ProgressBar>,
     pub size: Size,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -840,7 +840,7 @@ pub struct FailureArtifactManifest {
 #[derive(Debug, Clone)]
 pub(crate) struct FailureObservation {
     pub program_statuses: Option<Vec<crate::api::ProgramStatus>>,
-    pub progress_bar: crate::api::ProgressBar,
+    pub progress_bar: Option<crate::api::ProgressBar>,
     pub rows: Vec<Vec<EmuCell>>,
     pub cols: u16,
     pub title: Option<String>,
@@ -2089,7 +2089,7 @@ mod tests {
         let rows = emu.viewable_rows();
         let observation = FailureObservation {
             program_statuses: None,
-            progress_bar: crate::api::ProgressBar::default(),
+            progress_bar: None,
             rows: rows.clone(),
             cols: 1,
             title: None,

@@ -157,6 +157,18 @@ impl Default for ProgressBar {
     }
 }
 
+impl ProgressBar {
+    #[cfg(any(feature = "ghostty", feature = "rio"))]
+    pub(crate) fn update(&mut self, state: ProgressState, progress: Option<u8>) {
+        self.state = state;
+        if state == ProgressState::Inactive {
+            self.progress = Some(0);
+        } else if state != ProgressState::Indeterminate && progress.is_some() {
+            self.progress = progress;
+        }
+    }
+}
+
 /// Only supplied fields participate in a progress assertion.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1301,7 +1313,7 @@ pub struct EffectiveTimeouts {
 pub struct State {
     /// Native records, or `None` when the backend does not report program status.
     pub program_statuses: Option<Vec<ProgramStatus>>,
-    pub progress_bar: ProgressBar,
+    pub progress_bar: Option<ProgressBar>,
     pub session_shell: Option<String>,
     pub cols: u16,
     pub rows: u16,

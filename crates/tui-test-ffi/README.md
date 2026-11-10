@@ -10,7 +10,7 @@ This ABI is an internal contract, not a stable public C SDK.
 The language adapters preserve their public convenience APIs.
 ABI version 4 includes the shared pointer and asynchronous entrypoints.
 ABI version 5 adds native scrollback operations and the full-width `TuiViewport` result.
-ABI version 9 adds OSC 9;4 progress results, match inputs, and the `TuiState.progress_bar` field.
+ABI version 11 adds native OSC 9;4 progress results, match inputs, and nullable `TuiState.progress_bar`.
 `tui_get_progress_bar` returns `TuiResult.progress_bar`.
 `tui_wait_progress_bar` and `tui_expect_progress_bar` accept `TuiProgressBarMatch` and an optional timeout.
 The state uses the existing `TuiString` enum convention: `inactive`, `normal`, `error`, `indeterminate`, or `paused`.

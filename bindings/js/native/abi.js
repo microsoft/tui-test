@@ -257,10 +257,14 @@ types.TuiOptionalProgramStatus = koffi.struct({
 present: "bool",
 value: types.TuiProgramStatus,
 });
+types.TuiOptionalProgressBar = koffi.struct({
+present: "bool",
+value: types.TuiProgressBar,
+});
 types.TuiState = koffi.struct({
 program_statuses: "void *",
 program_statuses_len: "size_t",
-progress_bar: types.TuiProgressBar,
+progress_bar: types.TuiOptionalProgressBar,
 session_shell: types.TuiString,
 cols: "uint16_t",
 rows: "uint16_t",
@@ -567,10 +571,14 @@ TuiOptionalProgramStatus: {
 present: "bool",
 value: "TuiProgramStatus",
 },
+TuiOptionalProgressBar: {
+present: "bool",
+value: "TuiProgressBar",
+},
 TuiState: {
 program_statuses: "*TuiProgramStatus",
 program_statuses_len: "usize",
-progress_bar: "TuiProgressBar",
+progress_bar: "TuiOptionalProgressBar",
 session_shell: "TuiString",
 cols: "u16",
 rows: "u16",

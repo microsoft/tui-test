@@ -47,7 +47,7 @@ ProgramStatus: {
 },
 State: {
 "program_statuses": ["program_statuses", "Option<Vec<ProgramStatus>>"],
-"progress_bar": ["progress_bar", "ProgressBar"],
+"progress_bar": ["progress_bar", "Option<ProgressBar>"],
 "session_shell": ["session_shell", "Option<String>"],
 "cols": ["cols", "u16"],
 "rows": ["rows", "u16"],

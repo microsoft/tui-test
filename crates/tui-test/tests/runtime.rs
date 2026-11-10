@@ -83,7 +83,10 @@ fn program_status_uses_native_support_and_preserves_exit_diagnostics() {
             })
             .unwrap();
         if backend.as_str() != "ghostty" {
-            assert!(session.state().unwrap().program_statuses.is_none());
+            let OperationResult::State(state) = session.execute(Operation::State).unwrap() else {
+                panic!("expected state");
+            };
+            assert!(state.program_statuses.is_none());
             for operation in [
                 Operation::GetProgramStatuses,
                 Operation::GetProgramStatus { id: String::new() },
@@ -153,7 +156,7 @@ fn program_status_uses_native_support_and_preserves_exit_diagnostics() {
 }
 
 #[test]
-fn progress_reports_are_shared_and_wait_failures_keep_current_state() {
+fn progress_reports_use_native_backends_and_reject_unsupported_calls() {
     use tui_test::{Backend, ProgressBarMatch, ProgressState};
     for &backend in Backend::ALL {
         let session = Session::new(format!(
@@ -181,6 +184,29 @@ fn progress_reports_are_shared_and_wait_failures_keep_current_state() {
         };
         options.backend = backend;
         session.run(options).unwrap();
+        if !matches!(backend.as_str(), "ghostty" | "rio") {
+            for operation in [
+                Operation::GetProgressBar,
+                Operation::WaitProgressBar {
+                    expected: ProgressBarMatch::default(),
+                    timeout_ms: Some(0),
+                },
+                Operation::ExpectProgressBar {
+                    expected: ProgressBarMatch::default(),
+                    timeout_ms: Some(0),
+                },
+            ] {
+                let error = session.execute(operation).unwrap_err();
+                assert_eq!(error.kind, ErrorKind::Usage);
+                assert!(error.message.contains("unsupported"));
+            }
+            let OperationResult::State(state) = session.execute(Operation::State).unwrap() else {
+                panic!("expected state")
+            };
+            assert_eq!(state.progress_bar, None);
+            session.close().unwrap();
+            continue;
+        }
         let expected = ProgressBarMatch {
             state: Some(ProgressState::Normal),
             progress: Some(42),

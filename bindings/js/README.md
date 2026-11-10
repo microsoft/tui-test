@@ -500,19 +500,9 @@ const terminal = new TuiTest("test", {
 ### Progress bars
 
 `getProgressBar()` returns `{ state, progress }` from OSC 9;4 reports.
-`state` is `"inactive"`, `"normal"`, `"error"`, `"indeterminate"`, or `"paused"`.
-`progress` is a percentage from 0 to 100, or `null` when unavailable.
-`state()` also includes `progress_bar`.
-
-```js
-await terminal.waitProgressBar({ state: "normal" }, { timeout: 5000 });
-await terminal.expectProgressBar({ progress: 50 });
-console.log(await terminal.getProgressBar());
-```
-
-Only supplied fields participate in a match. An empty match succeeds immediately.
-These methods use the text timeout by default.
-Run `node examples/progress-bar.mjs` for a complete example.
+`waitProgressBar()` and `expectProgressBar()` compare supplied fields and use the text timeout.
+Only Ghostty and Rio support these methods. Other backends raise `UsageError` and expose `progress_bar: null` in snapshots.
+See [application progress](../../README.md#application-progress) for states and a runnable Rust example.
 
 ### Program status
 

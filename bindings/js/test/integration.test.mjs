@@ -68,7 +68,7 @@ test("unsupported program status is null in snapshots and raises a usage error",
 });
 
 test("OSC progress bar supports partial matches, state reads, and errors", async () => {
-  const terminal = TuiTest.ephemeral("progress-bar", { backend: "alacritty" });
+  const terminal = TuiTest.ephemeral("progress-bar", { backend: "ghostty" });
   try {
     await terminal.run(process.execPath, runtimeScript(`
       process.stdout.write("\\x1b]9;4;1;50\\x07");
@@ -423,6 +423,7 @@ test("rendering settings and native assertions preserve binding parity", async (
       su.expectColors({ foreground: "#abcdef", palette: [[2, "#123456"]], timeout: 2000 }),
     ]);
     assert.deepEqual(await su.getModes(), (await su.state()).modes);
+    assert.equal((await su.state()).progress_bar, null);
     assert.deepEqual(await su.getColors(), (await su.state()).colors);
     await assert.rejects(su.expectCursor({ visible: true, timeout: 0 }), /expectCursor/);
     await assert.rejects(su.expectMode("not_a_mode", true, { timeout: 0 }), /unknown.*mode/);

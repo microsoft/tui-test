@@ -92,6 +92,11 @@ type abiResult struct {
 	snapshot           uint32
 	privateData        unsafe.Pointer
 }
+type abiOptionalProgressBar struct {
+	_       structs.HostLayout
+	present bool
+	value   abiProgressBar
+}
 type abiOpenResult struct {
 	_         structs.HostLayout
 	shellPID  abiOptionalU64
@@ -141,7 +146,7 @@ type abiState struct {
 	_                  structs.HostLayout
 	programStatuses    *abiProgramStatus
 	programStatusesLen uintptr
-	progressBar        abiProgressBar
+	progressBar        abiOptionalProgressBar
 	sessionShell       abiString
 	cols               uint16
 	rows               uint16

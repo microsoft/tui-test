@@ -93,7 +93,7 @@ export interface ProgramStatusMatch {
   progress?: number;
 }
 export type State = Omit<NativeState, "progress_bar" | "program_statuses"> & {
-  progress_bar: ProgressBar;
+  progress_bar: ProgressBar | null;
   program_statuses: ProgramStatus[] | null;
 };
 

@@ -95,6 +95,8 @@ fn progress_bar_commands_match_optional_fields() {
     let sandbox = Sandbox::new("progress-bar");
     sandbox.ok(&[
         "run",
+        "--backend",
+        "ghostty",
         "--",
         "python3",
         "-u",

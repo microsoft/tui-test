@@ -351,20 +351,9 @@ Asciicast remains a timestamped output stream; FPS sampling does not change it.
 ## Progress bars
 
 `GetProgressBar()` returns a `ProgressBar` from OSC 9;4 reports.
-`State.ProgressBar` contains the same data.
-`ProgressState` defines `ProgressInactive`, `ProgressNormal`, `ProgressError`, `ProgressIndeterminate`, and `ProgressPaused`.
-`Progress` points to a percentage from 0 to 100, or is `nil` when unavailable.
-
-```go
-err := terminal.WaitProgressBar(tuitest.ProgressBarMatch{
-    State: tuitest.Ptr(tuitest.ProgressNormal),
-}, tuitest.WaitOptions{})
-```
-
-`ExpectProgressBar` accepts the same arguments.
-Only non-nil fields participate in a match. An empty match succeeds immediately.
-`WaitOptions.Timeout` overrides the text timeout.
-Run `go run ./examples/progress` for a complete example.
+`WaitProgressBar()` and `ExpectProgressBar()` compare non-nil `ProgressBarMatch` fields and use the text timeout.
+Only Ghostty and Rio support these methods. Other backends return `UsageError` and expose `State.ProgressBar=nil`.
+See [application progress](../../README.md#application-progress) for states and a runnable Rust example.
 
 ### Program status
 

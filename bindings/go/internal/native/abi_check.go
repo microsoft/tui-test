@@ -39,6 +39,7 @@ func nativeLayoutPairs() []nativeLayoutPair {
 		{reflect.TypeFor[abiMatch](), reflect.TypeFor[C.TuiMatch]()},
 		{reflect.TypeFor[abiBellEvent](), reflect.TypeFor[C.TuiBellEvent]()},
 		{reflect.TypeFor[abiProgressBar](), reflect.TypeFor[C.TuiProgressBar]()},
+		{reflect.TypeFor[abiOptionalProgressBar](), reflect.TypeFor[C.TuiOptionalProgressBar]()},
 		{reflect.TypeFor[abiProgressBarMatch](), reflect.TypeFor[C.TuiProgressBarMatch]()},
 		{reflect.TypeFor[abiProgramStatus](), reflect.TypeFor[C.TuiProgramStatus]()},
 		{reflect.TypeFor[abiProgramStatusMatch](), reflect.TypeFor[C.TuiProgramStatusMatch]()},

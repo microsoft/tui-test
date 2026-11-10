@@ -426,7 +426,11 @@ func engineContext(context *ExecutionContext) *native.ExecutionContext {
 	return result
 }
 func engineState(state native.State) State {
-	return State{ProgramStatuses: engineProgramStatuses(state.ProgramStatuses), SessionShell: state.SessionShell, Cols: state.Cols, Rows: state.Rows, Cursor: Cursor(state.Cursor), Title: state.Title, Cwd: state.Cwd, LastCommand: state.LastCommand, LastExit: state.LastExit, ExitSignal: state.ExitSignal, Exited: state.Exited, Ready: state.Ready, BellCount: state.BellCount, ProgressBar: engineProgressBar(state.ProgressBar), Modes: state.Modes, MouseMode: state.MouseMode, Colors: TerminalColors(state.Colors), Timeouts: EffectiveTimeouts(state.Timeouts), Text: state.Text}
+	var progress *ProgressBar
+	if state.ProgressBar != nil {
+		progress = Ptr(engineProgressBar(*state.ProgressBar))
+	}
+	return State{ProgramStatuses: engineProgramStatuses(state.ProgramStatuses), SessionShell: state.SessionShell, Cols: state.Cols, Rows: state.Rows, Cursor: Cursor(state.Cursor), Title: state.Title, Cwd: state.Cwd, LastCommand: state.LastCommand, LastExit: state.LastExit, ExitSignal: state.ExitSignal, Exited: state.Exited, Ready: state.Ready, BellCount: state.BellCount, ProgressBar: progress, Modes: state.Modes, MouseMode: state.MouseMode, Colors: TerminalColors(state.Colors), Timeouts: EffectiveTimeouts(state.Timeouts), Text: state.Text}
 }
 func engineCells(cells []native.Cell) []Cell {
 	if cells == nil {

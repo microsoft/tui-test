@@ -24,6 +24,7 @@ use ghostty_vt::terminal::{
 use ghostty_vt::{RenderState, Terminal};
 
 use super::program_status::ProgramStatuses;
+use crate::api::{ProgressBar, ProgressState};
 use crate::event::BellTracker;
 use crate::input::keys::{KeyEventKind, KeyPress, Mods};
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
@@ -192,8 +193,9 @@ pub(super) struct GhosttyCore {
     cell_iter: CellIterator<'static>,
     pending: Rc<RefCell<Vec<u8>>>,
     program_statuses: Rc<RefCell<ProgramStatuses>>,
-    callback_error: Rc<RefCell<Option<anyhow::Error>>>,
     clipboard: Clipboard,
+    progress: Rc<RefCell<ProgressBar>>,
+    callback_error: Rc<RefCell<Option<anyhow::Error>>>,
     profile: Profile,
     frame: Option<Frame>,
 }
@@ -232,8 +234,9 @@ impl GhosttyCore {
 
         let pending = Rc::new(RefCell::new(Vec::new()));
         let program_statuses = Rc::new(RefCell::new(ProgramStatuses::default()));
-        let callback_error = Rc::new(RefCell::new(None));
         let clipboard = Clipboard::default();
+        let progress = Rc::new(RefCell::new(ProgressBar::default()));
+        let callback_error = Rc::new(RefCell::new(None));
         terminal
             .on_program_status({
                 let statuses = Rc::clone(&program_statuses);
@@ -262,6 +265,27 @@ impl GhosttyCore {
             .context("registering PTY replies")?
             .on_bell(move |_terminal| bells.ring())
             .context("registering bell events")?
+            .on_progress_report({
+                let progress = Rc::clone(&progress);
+                let callback_error = Rc::clone(&callback_error);
+                move |_terminal, report| {
+                    use ghostty_vt::terminal::ProgressState as Native;
+                    let state = match report.state() {
+                        Ok(Native::Remove) => ProgressState::Inactive,
+                        Ok(Native::Set) => ProgressState::Normal,
+                        Ok(Native::Error) => ProgressState::Error,
+                        Ok(Native::Indeterminate) => ProgressState::Indeterminate,
+                        Ok(Native::Pause) => ProgressState::Paused,
+                        other => {
+                            *callback_error.borrow_mut() =
+                                Some(anyhow!("invalid native progress state: {other:?}"));
+                            return;
+                        }
+                    };
+                    progress.borrow_mut().update(state, report.progress());
+                }
+            })
+            .context("registering progress reports")?
             .on_device_attributes(|_terminal| {
                 Some(DeviceAttributes {
                     primary: PrimaryDeviceAttributes::new(
@@ -288,8 +312,9 @@ impl GhosttyCore {
             cell_iter: CellIterator::new().context("creating cell iterator")?,
             pending,
             program_statuses,
-            callback_error,
             clipboard,
+            progress,
+            callback_error,
             profile,
             frame: None,
         })
@@ -310,6 +335,10 @@ impl GhosttyCore {
 
     pub(super) fn finish_process(&mut self) {
         self.program_statuses.borrow_mut().finish_process();
+    }
+
+    pub(super) fn progress_bar(&self) -> ProgressBar {
+        *self.progress.borrow()
     }
 
     pub(super) fn mode(&self, mode: TerminalMode) -> Result<bool> {

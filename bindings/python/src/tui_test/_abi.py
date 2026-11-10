@@ -48,6 +48,10 @@ class TuiResult(ctypes.Structure):
     pass
 
 
+class TuiOptionalProgressBar(ctypes.Structure):
+    pass
+
+
 class TuiOpenResult(ctypes.Structure):
     pass
 
@@ -507,10 +511,16 @@ TuiOptionalProgramStatus._fields_ = [
 ]
 
 
+TuiOptionalProgressBar._fields_ = [
+    ("present", ctypes.c_bool),
+    ("value", TuiProgressBar),
+]
+
+
 TuiState._fields_ = [
     ("program_statuses", ctypes.POINTER(TuiProgramStatus)),
     ("program_statuses_len", ctypes.c_size_t),
-    ("progress_bar", TuiProgressBar),
+    ("progress_bar", TuiOptionalProgressBar),
     ("session_shell", TuiString),
     ("cols", ctypes.c_uint16),
     ("rows", ctypes.c_uint16),

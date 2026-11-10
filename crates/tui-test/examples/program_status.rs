@@ -104,6 +104,6 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
-    demonstrate("ghostty".parse()?)?;
+    demonstrate("ghostty".parse().map_err(anyhow::Error::msg)?)?;
     Ok(())
 }

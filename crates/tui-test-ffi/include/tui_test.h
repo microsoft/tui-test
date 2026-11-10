@@ -77,6 +77,11 @@ typedef struct TuiProgressBar {
   struct TuiOptionalU64 progress;
 } TuiProgressBar;
 
+typedef struct TuiOptionalProgressBar {
+  bool present;
+  struct TuiProgressBar value;
+} TuiOptionalProgressBar;
+
 typedef struct TuiCursor {
   uint16_t x;
   uint16_t y;
@@ -96,7 +101,7 @@ typedef struct TuiTimeouts {
 typedef struct TuiState {
   const struct TuiProgramStatus *program_statuses;
   uintptr_t program_statuses_len;
-  struct TuiProgressBar progress_bar;
+  struct TuiOptionalProgressBar progress_bar;
   struct TuiString session_shell;
   uint16_t cols;
   uint16_t rows;

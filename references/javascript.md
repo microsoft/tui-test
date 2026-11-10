@@ -111,7 +111,7 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `getCommand()`, `getOutput()`, `getExitCode()` | Read command state. |
 | `getCwd()`, `getCursor()`, `getSize()`, `getTitle()` | Read terminal fields. |
 | `getClipboard()` | Read the session clipboard. |
-| `getProgressBar()` | Read the OSC 9;4 progress state and percentage. |
+| `getProgressBar()` | Read native OSC 9;4 progress on Ghostty or Rio. Other backends raise `UsageError`. |
 | `getProgramStatuses()` | List native Ghostty OSC 7501 records in stable ID order. Other backends raise `UsageError`. |
 | `getProgramStatus(id = "")` | Read one record, or `null`. The empty ID selects the root. |
 | `waitProgramStatus(expected = {}, opts)`, `expectProgramStatus(expected = {}, opts)` | Compare supplied `ProgramStatusMatch` fields exactly; `opts.timeout` overrides the text timeout. |

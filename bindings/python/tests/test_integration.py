@@ -111,7 +111,7 @@ class IntegrationTests(unittest.TestCase):
 
     def test_progress_bar(self):
         async def scenario():
-            async with self._client(backend="alacritty") as terminal:
+            async with self._client(backend="ghostty") as terminal:
                 await terminal.run(
                     sys.executable, "-u", "-c",
                     "import sys; sys.stdout.write('\\x1b]9;4;1;50\\x07'); sys.stdout.flush(); "
@@ -202,6 +202,7 @@ class IntegrationTests(unittest.TestCase):
                 await su.expect_exit_code(0)
                 st = await su.state()
                 self.assertGreater(st.cols, 0)
+                self.assertIsNone(st.progress_bar)
 
         run(scenario())
 
