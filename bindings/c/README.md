@@ -102,9 +102,11 @@ basic.exe
 
 ## ABI and ownership
 
-- The `session` argument contains JSON, not a plain session name:
+- Most `session` arguments contain JSON, not a plain session name:
   `{"name":"example"}`. It can also carry the optional context fields below.
   Encode strings with a JSON encoder when they contain user input.
+- Exception: `tui_recording()` and `tui_recording_start()` require the plain
+  UTF-8 session name, such as `example`, without JSON quotes or an object.
 - Include `tui_test.h`. Do not copy its declarations into your application.
 - Compare `tui_abi_version()` with `ABI_VERSION` before other API calls.
   Use the header and library from the same SDK. Do not mix ABI versions.
