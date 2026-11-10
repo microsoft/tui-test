@@ -55,7 +55,7 @@ export interface ProgramStatus {
 }
 
 export interface State {
-  program_statuses: Array<ProgramStatus>
+  program_statuses: Array<ProgramStatus> | null
   progress_bar: ProgressBar
   session_shell: string | null
   cols: number

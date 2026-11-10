@@ -24,6 +24,7 @@ use crate::terminal::emu::{
 use self::core::GhosttyCore;
 
 mod core;
+mod program_status;
 
 #[derive(Debug)]
 enum ClipboardOperation {
@@ -272,6 +273,14 @@ impl Emulator for GhosttyEmu {
 
     fn take_pending_writes(&mut self) -> Vec<u8> {
         self.call("draining replies", GhosttyCore::take_pending_writes)
+    }
+
+    fn program_statuses(&self) -> Option<Vec<crate::api::ProgramStatus>> {
+        Some(self.call("reading program status", GhosttyCore::program_statuses))
+    }
+
+    fn finish_process(&mut self) {
+        self.call("finishing program status", GhosttyCore::finish_process);
     }
 
     fn encode_key(&self, press: &KeyPress) -> Option<Vec<u8>> {

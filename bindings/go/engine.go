@@ -16,6 +16,9 @@ func engineProgramStatus(value native.ProgramStatus) ProgramStatus {
 }
 
 func engineProgramStatuses(values []native.ProgramStatus) []ProgramStatus {
+	if values == nil {
+		return nil
+	}
 	result := make([]ProgramStatus, len(values))
 	for index, value := range values {
 		result[index] = engineProgramStatus(value)

@@ -541,24 +541,9 @@ See `examples/progress_bar.py` for a complete example.
 
 `get_program_statuses()` lists OSC 7501 records in stable ID order.
 `get_program_status(id="")` returns a `ProgramStatus`, or `None` when absent.
-The empty ID selects the root. `state().program_statuses` contains the same records.
-Each record contains `id`, `state`, `app`, `title`, `message`, `kind`, and `progress`.
-The app value includes inheritance. Text values contain decoded UTF-8.
-
-```python
-from tui_test import ProgramStatusMatch
-
-await terminal.wait_program_status(ProgramStatusMatch(id="build", state="blocked"), timeout=5000)
-await terminal.expect_program_status(ProgramStatusMatch(id="build", kind="permission"))
-print(await terminal.get_program_status("build"))
-```
-
-Filters compare supplied fields exactly. An omitted ID selects the root, not every record.
-An absent record never matches. Progress ranges from 0 to 100.
-States are `idle`, `working`, `done`, `blocked`, and `error`.
-Kinds are `permission`, `question`, and `auth`.
-Both methods use the text timeout unless `timeout=` overrides it.
-See `examples/program_status.py` for a complete example.
+`wait_program_status(expected)` and `expect_program_status(expected)` accept `ProgramStatusMatch` and optional `timeout=`.
+Select `backend="ghostty"`. Other backends raise `UsageError`; their `state().program_statuses` is `None`.
+See [program status](../../README.md#program-status) for record semantics and the runnable example.
 
 ### Errors
 

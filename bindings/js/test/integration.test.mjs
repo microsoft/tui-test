@@ -24,7 +24,7 @@ import { withTerminal } from "../dist/test/index.js";
 const shell = process.platform === "win32" ? "pwsh" : undefined;
 
 test("OSC program status supports IDs, decoded text, partial matches, and invalid filters", async () => {
-  const terminal = TuiTest.ephemeral("program-status", { backend: "alacritty" });
+  const terminal = TuiTest.ephemeral("program-status", { backend: "ghostty" });
   try {
     await terminal.run(process.execPath, runtimeScript(`
       process.stdout.write("\\x1b]7501;state=working:app=demo\\x07");
@@ -51,6 +51,17 @@ test("OSC program status supports IDs, decoded text, partial matches, and invali
     }
     await assert.rejects(terminal.getProgramStatus("bad//id"), UsageError);
     assert.deepEqual(expected, { id: "build", state: "blocked", progress: 50 });
+  } finally {
+    await terminal.closeQuiet();
+  }
+});
+
+test("unsupported program status is null in snapshots and raises a usage error", async () => {
+  const terminal = TuiTest.ephemeral("unsupported-status", { backend: "alacritty" });
+  try {
+    await terminal.run(process.execPath, runtimeScript("process.stdin.resume()"), { waitReady: false });
+    assert.equal((await terminal.state()).program_statuses, null);
+    await assert.rejects(terminal.getProgramStatuses(), UsageError);
   } finally {
     await terminal.closeQuiet();
   }

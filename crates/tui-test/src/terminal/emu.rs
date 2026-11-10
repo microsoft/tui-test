@@ -433,6 +433,14 @@ pub trait Emulator: Send {
     /// forwards these to the PTY.
     fn take_pending_writes(&mut self) -> Vec<u8>;
 
+    /// Native program-status records, or `None` when the backend does not report them.
+    fn program_statuses(&self) -> Option<Vec<crate::api::ProgramStatus>> {
+        None
+    }
+
+    /// Remove unfinished native records when the child exits.
+    fn finish_process(&mut self) {}
+
     /// Read a clipboard value.
     fn clipboard(&self, _clipboard: ClipboardType) -> anyhow::Result<String> {
         anyhow::bail!("clipboard access is unavailable")

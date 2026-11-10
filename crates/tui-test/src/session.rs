@@ -50,7 +50,6 @@ pub struct TermState {
     /// Shell-integration state, derived from the raw PTY stream rather than
     /// the emulator, so it is identical across backends.
     pub tracker: CommandTracker,
-    pub(crate) reports: crate::terminal::reports::Reports,
     pub(crate) mouse_mode: MouseModeTracker,
     pub observed_clipboard_revision: u64,
     pub started_at: Instant,
@@ -218,7 +217,6 @@ impl Session {
             #[cfg(feature = "recording-raster")]
             recording_frames: None,
             tracker: CommandTracker::new(),
-            reports: crate::terminal::reports::Reports::default(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
             started_at,
@@ -314,11 +312,11 @@ impl Session {
                             let mut st = reader_state
                                 .lock()
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            let TermState { emu, reports, .. } = &mut *st;
-                            let pending = reports.process(emu.as_mut(), &buf[..n]);
+                            st.emu.process(&buf[..n]);
+                            let pending = st.emu.take_pending_writes();
                             st.tracker.feed(&buf[..n]);
                             if st.exited.is_some() {
-                                st.reports.finish_process();
+                                st.emu.finish_process();
                             }
                             st.visual_revision = st.visual_revision.wrapping_add(1);
                             st.screen_dirty = true;
@@ -361,7 +359,7 @@ impl Session {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     st.exited = Some(status.code);
-                    st.reports.finish_process();
+                    st.emu.finish_process();
                     st.exit_signal = status.signal;
                     break;
                 }
@@ -1416,7 +1414,6 @@ mod tests {
             #[cfg(feature = "recording-raster")]
             recording_frames: None,
             tracker: CommandTracker::new(),
-            reports: crate::terminal::reports::Reports::default(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
             started_at,

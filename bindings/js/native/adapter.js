@@ -64,7 +64,7 @@ function validate(type, value, label) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
   if (type === "ProgressBarMatch" || type === "ProgramStatusMatch") {
     for (const key of Object.keys(value)) {
-      if (!Object.hasOwn(fields, key)) throw new TypeError(`unknown progress field ${JSON.stringify(key)}`);
+      if (!Object.hasOwn(fields, key)) throw new TypeError(`unknown ${type === "ProgramStatusMatch" ? "program-status" : "progress"} field ${JSON.stringify(key)}`);
     }
   }
   if (type.startsWith("Locator") || ["RenderStyle", "FontFamilies", "WindowStyle", "BorderStyle", "ShadowStyle", "RecordingCursorStyle", "PaddingSides"].includes(type)) {
@@ -144,7 +144,8 @@ function decode(type, value) {
     if (field.endsWith("_len")) continue;
     let decoded;
     if (fieldType.startsWith("*")) {
-      decoded = array(fieldType.slice(1), value[field], value[`${field}_len`]);
+      decoded = field === "program_statuses" && value[field] === null
+        ? null : array(fieldType.slice(1), value[field], value[`${field}_len`]);
       if (field === "modes") decoded = Object.fromEntries(decoded.map((m) => [m.name, m.enabled]));
       if (field === "palette") decoded = Object.fromEntries(decoded.map((p) => [p.key, p.value]));
     } else if (fieldType.startsWith("Tui")) decoded = decode(fieldType, value[field]);

@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define ABI_VERSION 10
+#define ABI_VERSION 12
 
 /**
  * A thread-owned asynchronous call. Start, poll, and free it on the same thread.

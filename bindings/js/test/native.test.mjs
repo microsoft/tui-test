@@ -483,6 +483,8 @@ test("owned native inputs preserve numeric and operation validation", async () =
     [() => session.screenshot({ background: "#000000", transparent: true }), /background and transparent options conflict/],
     [() => session.waitClipboard(undefined, { regex: true }), /clipboard regex requires text/],
     [() => session.waitClipboard("[", { regex: true }), /invalid regex/],
+    [() => session.waitProgressBar({ unknown: true }), /unknown progress field "unknown"/],
+    [() => session.waitProgramStatus({ unknown: true }), /unknown program-status field "unknown"/],
   ];
   for (const [call, message] of failures) {
     await assert.rejects(call, (error) => {

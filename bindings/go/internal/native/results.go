@@ -127,6 +127,9 @@ func nativeProgramStatus(value abiProgramStatus) ProgramStatus {
 }
 
 func nativeProgramStatuses(pointer *abiProgramStatus, length uintptr) []ProgramStatus {
+	if pointer == nil {
+		return nil
+	}
 	values := make([]ProgramStatus, int(length))
 	for index, value := range unsafe.Slice(pointer, int(length)) { //nolint:gosec // Rust owns the buffer until ResultFree.
 		values[index] = nativeProgramStatus(value)

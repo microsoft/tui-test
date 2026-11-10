@@ -70,7 +70,7 @@ def run(coro):
 class IntegrationTests(unittest.TestCase):
     def test_program_status(self):
         async def scenario():
-            async with self._client(backend="alacritty") as terminal:
+            async with self._client(backend="ghostty") as terminal:
                 await terminal.run(
                     sys.executable, "-u", "-c",
                     "import sys; sys.stdout.write('\\x1b]7501;state=working:app=demo\\x07"
@@ -98,6 +98,15 @@ class IntegrationTests(unittest.TestCase):
                 with self.assertRaises(UsageError):
                     await terminal.get_program_status("bad//id")
                 self.assertEqual(expected, ProgramStatusMatch(id="build", state="blocked", progress=50))
+        run(scenario())
+
+    def test_program_status_unsupported(self):
+        async def scenario():
+            async with self._client(backend="alacritty") as terminal:
+                await terminal.run(sys.executable, "-c", "input()", wait_ready=False)
+                self.assertIsNone((await terminal.state()).program_statuses)
+                with self.assertRaises(UsageError):
+                    await terminal.get_program_statuses()
         run(scenario())
 
     def test_progress_bar(self):

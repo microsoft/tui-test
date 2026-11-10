@@ -19,10 +19,11 @@ use ghostty_vt::style::{Palette, PaletteIndex, RgbColor, Style, StyleColor, Unde
 use ghostty_vt::terminal::{
     ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Mode, Point,
     PointCoordinate, PointSpace, PrimaryDeviceAttributes, ScrollViewport,
-    SecondaryDeviceAttributes, TertiaryDeviceAttributes,
+    SecondaryDeviceAttributes, SemanticPromptKind, TertiaryDeviceAttributes,
 };
 use ghostty_vt::{RenderState, Terminal};
 
+use super::program_status::ProgramStatuses;
 use crate::event::BellTracker;
 use crate::input::keys::{KeyEventKind, KeyPress, Mods};
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
@@ -190,6 +191,8 @@ pub(super) struct GhosttyCore {
     row_iter: RowIterator<'static>,
     cell_iter: CellIterator<'static>,
     pending: Rc<RefCell<Vec<u8>>>,
+    program_statuses: Rc<RefCell<ProgramStatuses>>,
+    callback_error: Rc<RefCell<Option<anyhow::Error>>>,
     clipboard: Clipboard,
     profile: Profile,
     frame: Option<Frame>,
@@ -228,8 +231,30 @@ impl GhosttyCore {
             .context("setting palette")?;
 
         let pending = Rc::new(RefCell::new(Vec::new()));
+        let program_statuses = Rc::new(RefCell::new(ProgramStatuses::default()));
+        let callback_error = Rc::new(RefCell::new(None));
         let clipboard = Clipboard::default();
         terminal
+            .on_program_status({
+                let statuses = Rc::clone(&program_statuses);
+                let error = Rc::clone(&callback_error);
+                move |_terminal, report| {
+                    if let Err(failure) = statuses.borrow_mut().report(report) {
+                        *error.borrow_mut() = Some(failure);
+                    }
+                }
+            })
+            .context("registering program status")?
+            .on_semantic_prompt({
+                let statuses = Rc::clone(&program_statuses);
+                let error = Rc::clone(&callback_error);
+                move |_terminal, prompt| match prompt.kind() {
+                    Ok(SemanticPromptKind::PromptStart) => statuses.borrow_mut().finish_process(),
+                    Ok(_) => {}
+                    Err(failure) => *error.borrow_mut() = Some(failure.into()),
+                }
+            })
+            .context("registering semantic prompts")?
             .on_pty_write({
                 let pending = Rc::clone(&pending);
                 move |_terminal, data| pending.borrow_mut().extend_from_slice(data)
@@ -262,6 +287,8 @@ impl GhosttyCore {
             row_iter: RowIterator::new().context("creating row iterator")?,
             cell_iter: CellIterator::new().context("creating cell iterator")?,
             pending,
+            program_statuses,
+            callback_error,
             clipboard,
             profile,
             frame: None,
@@ -270,8 +297,19 @@ impl GhosttyCore {
 
     pub(super) fn process(&mut self, bytes: &[u8]) -> Result<()> {
         self.terminal.vt_write(bytes);
+        if let Some(error) = self.callback_error.borrow_mut().take() {
+            return Err(error).context("handling Ghostty report");
+        }
         self.frame = None;
         self.clamp_viewport()
+    }
+
+    pub(super) fn program_statuses(&self) -> Vec<crate::api::ProgramStatus> {
+        self.program_statuses.borrow().all()
+    }
+
+    pub(super) fn finish_process(&mut self) {
+        self.program_statuses.borrow_mut().finish_process();
     }
 
     pub(super) fn mode(&self, mode: TerminalMode) -> Result<bool> {

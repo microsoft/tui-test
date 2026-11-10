@@ -35,7 +35,7 @@ pub(super) fn fixture() -> (FailureReport, FailureObservation) {
     capture(&mut history, &emu, 40);
     history.pin_current();
     let observation = FailureObservation {
-        program_statuses: Vec::new(),
+        program_statuses: None,
         progress_bar: crate::api::ProgressBar::default(),
         rows: emu.viewable_rows(),
         cols: emu.size().0,

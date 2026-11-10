@@ -104,8 +104,6 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
-    for &backend in Backend::ALL {
-        demonstrate(backend)?;
-    }
+    demonstrate("ghostty".parse()?)?;
     Ok(())
 }

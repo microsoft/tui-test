@@ -1856,7 +1856,7 @@ fn capture_failure_observation_locked(
         target_arch: std::env::consts::ARCH.to_string(),
     };
     FailureObservation {
-        program_statuses: state.reports.program_statuses(),
+        program_statuses: state.emu.program_statuses(),
         progress_bar: state.reports.progress_bar(),
         rows: snapshot.rows,
         cols: snapshot.cols,
@@ -2139,8 +2139,11 @@ fn dispatch(
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .reports
-                .program_statuses(),
+                .emu
+                .program_statuses()
+                .ok_or_else(|| {
+                    TuiTestError::usage("program status is unsupported by this backend")
+                })?,
         )),
         Operation::GetProgramStatus { id } => {
             if !crate::api::valid_program_status_id(&id) {
@@ -2151,8 +2154,13 @@ fn dispatch(
                     .state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .reports
-                    .program_status(&id),
+                    .emu
+                    .program_statuses()
+                    .ok_or_else(|| {
+                        TuiTestError::usage("program status is unsupported by this backend")
+                    })?
+                    .into_iter()
+                    .find(|record| record.id == id),
             ))
         }
         Operation::WaitProgramStatus {
@@ -2446,7 +2454,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
     let (cols, rows) = state.emu.size();
     let bells = session.bells.snapshot();
     crate::api::State {
-        program_statuses: state.reports.program_statuses(),
+        program_statuses: state.emu.program_statuses(),
         progress_bar: state.reports.progress_bar(),
         session_shell: session.shell.map(|value| value.as_str().to_string()),
         cols,
@@ -4340,14 +4348,16 @@ fn expect_program_status(
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .reports
-            .program_status(&expected.id)
+            .emu
+            .program_statuses()
+            .map(|records| records.into_iter().find(|record| record.id == expected.id))
     };
-    let mut actual = current();
+    let mut actual = current()
+        .ok_or_else(|| TuiTestError::usage("program status is unsupported by this backend"))?;
     poll_until(
         session,
         || {
-            actual = current();
+            actual = current().expect("backend support cannot change during a wait");
             actual
                 .as_ref()
                 .is_some_and(|actual| expected.matches(actual))

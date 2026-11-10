@@ -79,7 +79,10 @@ fn program_status(s: &mut Storage, v: tui_test::api::ProgramStatus) -> TuiProgra
 }
 #[allow(unused_variables)]
 fn state(s: &mut Storage, v: tui_test::api::State) -> TuiState {
-    let program_statuses = s.program_statuses(v.program_statuses);
+    let program_statuses = match v.program_statuses {
+        Some(values) => s.program_statuses(values),
+        None => (std::ptr::null(), 0),
+    };
     let modes = s.modes(v.modes);
     TuiState {
         program_statuses: program_statuses.0,

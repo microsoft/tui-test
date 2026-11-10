@@ -222,7 +222,7 @@ fn output_models(models: &Models, c: &mut String, cc: &mut String) -> Result<()>
             let field = ident(&f.name);
             let cfield = if f.name == "char" { "character" } else { field };
             let value = format!("v.{field}");
-            let array = match f.ty.as_str() {
+            let array = match option(&f.ty).unwrap_or(&f.ty) {
                 "Vec<TextSpan>" => Some(("TuiSpan", "spans")),
                 "Vec<ProgramStatus>" => Some(("TuiProgramStatus", "program_statuses")),
                 "BTreeMap<String,bool>" => Some(("TuiMode", "modes")),
@@ -237,7 +237,11 @@ fn output_models(models: &Models, c: &mut String, cc: &mut String) -> Result<()>
                 }
             }
             if let Some((_, helper)) = array {
-                writeln!(cc, "let {cfield} = s.{helper}({value});")?;
+                if option(&f.ty).is_some() {
+                    writeln!(cc, "let {cfield} = match {value} {{ Some(values) => s.{helper}(values), None => (std::ptr::null(), 0) }};")?;
+                } else {
+                    writeln!(cc, "let {cfield} = s.{helper}({value});")?;
+                }
                 writeln!(init, "{cfield}: {cfield}.0, {cfield}_len: {cfield}.1,")?;
             } else {
                 let expr = if model == "EffectiveTimeouts" {

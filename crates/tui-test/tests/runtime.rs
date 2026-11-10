@@ -52,7 +52,7 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
 }
 
 #[test]
-fn program_status_exit_cleanup_and_diagnostics_are_shared() {
+fn program_status_uses_native_support_and_preserves_exit_diagnostics() {
     use tui_test::{Backend, ProgramState, ProgramStatusMatch};
     for &backend in Backend::ALL {
         let session = Session::new(format!(
@@ -82,6 +82,27 @@ fn program_status_exit_cleanup_and_diagnostics_are_shared() {
                 timeout_ms: Some(5_000),
             })
             .unwrap();
+        if backend.as_str() != "ghostty" {
+            assert!(session.state().unwrap().program_statuses.is_none());
+            for operation in [
+                Operation::GetProgramStatuses,
+                Operation::GetProgramStatus { id: String::new() },
+                Operation::WaitProgramStatus {
+                    expected: ProgramStatusMatch::default(),
+                    timeout_ms: Some(0),
+                },
+                Operation::ExpectProgramStatus {
+                    expected: ProgramStatusMatch::default(),
+                    timeout_ms: Some(0),
+                },
+            ] {
+                let error = session.execute(operation).unwrap_err();
+                assert_eq!(error.kind, ErrorKind::Usage);
+                assert!(error.message.contains("unsupported"));
+            }
+            session.close().unwrap();
+            continue;
+        }
         let OperationResult::ProgramStatuses(records) =
             session.execute(Operation::GetProgramStatuses).unwrap()
         else {

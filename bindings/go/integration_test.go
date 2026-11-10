@@ -346,11 +346,16 @@ func TestInputAndState(t *testing.T) {
 }
 
 func TestProgramStatus(t *testing.T) {
-	terminal := newTerminal(t, tuitest.ClientOptions{Backend: tuitest.Alacritty})
+	terminal := newTerminal(t, tuitest.ClientOptions{Backend: tuitest.Ghostty})
 	initial, err := terminal.GetProgramStatuses()
 	requireNoError(t, err)
-	if len(initial) != 0 {
+	if initial == nil || len(initial) != 0 {
 		t.Fatalf("initial=%+v", initial)
+	}
+	empty, err := terminal.State()
+	requireNoError(t, err)
+	if empty.ProgramStatuses == nil || len(empty.ProgramStatuses) != 0 {
+		t.Fatalf("initial state=%+v", empty.ProgramStatuses)
 	}
 	requireNoError(t, terminal.Submit(tuitest.Ptr("program-status")))
 	expected := tuitest.ProgramStatusMatch{ID: "build", State: tuitest.Ptr(tuitest.ProgramBlocked), Progress: tuitest.Ptr(uint8(50))}
@@ -397,6 +402,17 @@ func TestProgramStatus(t *testing.T) {
 		if !errors.As(err, &failure) || failure.Kind != tuitest.UsageError {
 			t.Fatalf("error=%v", err)
 		}
+	}
+}
+
+func TestProgramStatusUnsupported(t *testing.T) {
+	terminal := newTerminal(t, tuitest.ClientOptions{Backend: tuitest.Alacritty})
+	_, err := terminal.GetProgramStatuses()
+	requireKind(t, err, tuitest.UsageError)
+	state, err := terminal.State()
+	requireNoError(t, err)
+	if state.ProgramStatuses != nil {
+		t.Fatalf("unsupported status=%+v", state.ProgramStatuses)
 	}
 }
 

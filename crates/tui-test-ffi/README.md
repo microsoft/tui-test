@@ -18,11 +18,11 @@ An absent state and an absent percentage match any current value.
 The percentage must be from 0 to 100.
 The existing `tui_screenshot` signature remains unchanged; `tui_screenshot_ptr` adds the pointer form.
 
-ABI version 10 adds OSC 7501 program statuses. The CLI uses protocol version 12.
+ABI version 12 adds native Ghostty program status. The CLI uses protocol version 14.
 `tui_get_program_statuses` returns `TuiResult.program_statuses` and `program_statuses_len`.
 `tui_get_program_status` returns `TuiResult.program_status`, a `TuiOptionalProgramStatus`.
 Its `present` flag distinguishes an absent record from the root record.
-`TuiState.program_statuses` contains the same ordered list.
+`TuiState.program_statuses` contains the same ordered list. A null pointer means unsupported, not an empty list.
 `tui_wait_program_status` and `tui_expect_program_status` accept `TuiProgramStatusMatch` and an optional timeout.
 The generated `_start` functions copy their inputs before they return.
 

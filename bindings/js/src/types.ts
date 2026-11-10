@@ -94,7 +94,7 @@ export interface ProgramStatusMatch {
 }
 export type State = Omit<NativeState, "progress_bar" | "program_statuses"> & {
   progress_bar: ProgressBar;
-  program_statuses: ProgramStatus[];
+  program_statuses: ProgramStatus[] | null;
 };
 
 export type TextMatch = NativeTextMatch;

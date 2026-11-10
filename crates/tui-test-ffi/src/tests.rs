@@ -233,7 +233,7 @@ fn program_status_native_child_reads_and_waits() {
         success(tui_run(
             session,
             TuiOpenOptions {
-                backend: text("alacritty"),
+                backend: text("ghostty"),
                 wait_ready: TuiOptionalBool {
                     present: true,
                     value: false,
@@ -267,9 +267,10 @@ fn program_status_native_child_reads_and_waits() {
             TuiOptionalU64::default(),
         ));
         let result = tui_get_program_statuses(session);
-        assert_eq!(error_kind(result), 0);
-        let values =
-            std::slice::from_raw_parts((*result).program_statuses, (*result).program_statuses_len);
+        let value = result.as_ref().expect("native call returned a null result");
+        assert_eq!(value.error_kind, 0);
+        assert!(!value.program_statuses.is_null());
+        let values = std::slice::from_raw_parts(value.program_statuses, value.program_statuses_len);
         assert_eq!(values.len(), 2);
         assert_eq!(values[0].id.required().unwrap(), "");
         assert_eq!(values[1].id.required().unwrap(), "build");
@@ -279,8 +280,9 @@ fn program_status_native_child_reads_and_waits() {
         tui_result_free(result);
         for (id, present) in [("", true), ("build", true), ("missing", false)] {
             let result = tui_get_program_status(session, text(id));
-            assert_eq!(error_kind(result), 0);
-            assert_eq!((*result).program_status.present, present);
+            let value = result.as_ref().expect("native call returned a null result");
+            assert_eq!(value.error_kind, 0);
+            assert_eq!(value.program_status.present, present);
             tui_result_free(result);
         }
         success(tui_close(session, TuiOptionalBool::default()));

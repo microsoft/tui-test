@@ -1299,7 +1299,8 @@ pub struct EffectiveTimeouts {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct State {
-    pub program_statuses: Vec<ProgramStatus>,
+    /// Native records, or `None` when the backend does not report program status.
+    pub program_statuses: Option<Vec<ProgramStatus>>,
     pub progress_bar: ProgressBar,
     pub session_shell: Option<String>,
     pub cols: u16,

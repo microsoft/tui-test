@@ -264,6 +264,7 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 `size`, `title`, `clipboard`, `bells`, `bell-events`, `progress-bar`, and `program-status`.
 
 `get program-status` lists OSC 7501 records in stable ID order.
+These commands require `--backend ghostty`. Other backends return usage errors.
 `get program-status --id ID` returns one record, or `null` when the ID is absent.
 Use `--id ""` to read the root record.
 Records contain `id`, `state`, `app`, `title`, `message`, `kind`, and `progress`.
@@ -277,7 +278,7 @@ Kinds are `permission`, `question`, and `auth`. Progress ranges from 0 to 100.
 Both commands accept `--timeout MS` and use the text timeout by default.
 
 ```sh
-tui-test run python3 -u -c 'import sys; print("\033]7501;state=blocked:id=build:kind=permission:title=QnVpbGQ=\007", end="", flush=True); sys.stdin.read()'
+tui-test run --backend ghostty python3 -u -c 'import sys; print("\033]7501;state=blocked:id=build:kind=permission:title=QnVpbGQ=\007", end="", flush=True); sys.stdin.read()'
 tui-test wait program-status --id build --state blocked
 tui-test expect program-status --id build --title Build
 tui-test get program-status

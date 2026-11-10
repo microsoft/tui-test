@@ -35,7 +35,7 @@ The operation list alone is not sufficient. The following input and output contr
 - Diagnostics preserve caller context, artifact settings, trace settings, retention, and failure evidence.
 - Results preserve optional values, terminal attributes, match spans, palette entries, event sequence numbers, and snapshot outcomes.
 - Progress results preserve the OSC 9;4 state and optional percentage. Matches compare only supplied fields and validate percentages from 0 to 100.
-- Program statuses preserve OSC 7501 IDs, states, inherited app names, decoded text, request kinds, and optional percentages.
+- Program status uses Ghostty's native callbacks. Other backends return usage errors and null snapshot fields.
 - Status lists use stable ID order. An empty ID selects the root; an absent record never matches.
 - Status filters compare supplied fields exactly. Omitted IDs select the root, not every record.
 - Packed screens preserve dimensions, UTF-8 bytes, trailing spaces, and blank rows. Byte offsets are not terminal columns.

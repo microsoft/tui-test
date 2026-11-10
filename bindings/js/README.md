@@ -518,22 +518,9 @@ Run `node examples/progress-bar.mjs` for a complete example.
 
 `getProgramStatuses()` lists OSC 7501 records in stable ID order.
 `getProgramStatus(id = "")` returns one record, or `null` when absent.
-The empty ID selects the root. `state().program_statuses` contains the same records.
-Each record contains `id`, `state`, `app`, `title`, `message`, `kind`, and `progress`.
-The app value includes inheritance. Text values contain decoded UTF-8.
-
-```js
-await terminal.waitProgramStatus({ id: "build", state: "blocked" }, { timeout: 5000 });
-await terminal.expectProgramStatus({ id: "build", kind: "permission" });
-console.log(await terminal.getProgramStatus("build"));
-```
-
-Filters compare supplied fields exactly. An omitted ID selects the root, not every record.
-An absent record never matches. Progress ranges from 0 to 100.
-States are `idle`, `working`, `done`, `blocked`, and `error`.
-Kinds are `permission`, `question`, and `auth`.
-Both methods use the text timeout unless `opts.timeout` overrides it.
-Run `node examples/program-status.mjs` for a complete example.
+`waitProgramStatus(expected, opts)` and `expectProgramStatus(expected, opts)` compare supplied fields; the default ID selects the root.
+Select `backend: "ghostty"`. Other backends raise `UsageError`; their `state().program_statuses` is `null`.
+See [program status](../../README.md#program-status) for record semantics and the runnable example.
 
 ### Errors
 

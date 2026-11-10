@@ -20,7 +20,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 #[test]
 fn program_status_commands_select_ids_and_match_partial_fields() {
     let sandbox = Sandbox::new("program-status");
-    sandbox.ok(&["run", "--", "python3", "-u", "-c",
+    sandbox.ok(&["run", "--backend", "ghostty", "--", "python3", "-u", "-c",
         "import sys; sys.stdout.write('\\x1b]7501;state=working:app=demo\\x07\\x1b]7501;state=blocked:id=build:kind=permission:progress=50:title=QnVpbGQ=:msg=SGVsbG8g8J+MjQ==\\x07'); sys.stdout.flush(); sys.stdin.read()"]);
     sandbox.ok(&[
         "wait",

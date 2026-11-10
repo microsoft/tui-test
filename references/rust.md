@@ -175,18 +175,9 @@ Full API: [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/)
 
 `Operation::GetProgramStatuses` returns the OSC 7501 records in stable ID order.
 `Operation::GetProgramStatus { id }` returns one record, or `None` when absent.
-`ProgramStatus` contains `id`, `state`, `app`, `title`, `message`, `kind`, and `progress`.
-The app value includes inheritance. Text values contain decoded UTF-8.
-`State.program_statuses` and `TerminalDiagnostics.program_statuses` contain the same status records.
+Only Ghostty supports these operations. Other backends return usage errors and `None` in state and diagnostic snapshots.
 
 `Operation::WaitProgramStatus` and `Operation::ExpectProgramStatus` accept `expected: ProgramStatusMatch` and `timeout_ms`.
 A default match selects the root record through its empty ID.
 Supplied fields must match exactly. An absent record never matches.
-States are `Idle`, `Working`, `Done`, `Blocked`, and `Error`.
-Kinds are `Permission`, `Question`, and `Auth`. Progress ranges from 0 to 100.
-
-Run the [program status example](../crates/tui-test/examples/program_status.rs):
-
-```sh
-env -u CARGO_TARGET_DIR cargo run -p tui-test-rs --example program_status
-```
+See [program status](../README.md#program-status) for record semantics and the runnable example.
