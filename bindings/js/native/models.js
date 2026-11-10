@@ -36,7 +36,17 @@ ProgressBar: {
 "state": ["state", "ProgressState"],
 "progress": ["progress", "Option<u8>"],
 },
+ProgramStatus: {
+"id": ["id", "String"],
+"state": ["state", "ProgramState"],
+"app": ["app", "Option<String>"],
+"title": ["title", "Option<String>"],
+"message": ["message", "Option<String>"],
+"kind": ["kind", "Option<ProgramStatusKind>"],
+"progress": ["progress", "Option<u8>"],
+},
 State: {
+"program_statuses": ["program_statuses", "Vec<ProgramStatus>"],
 "progress_bar": ["progress_bar", "ProgressBar"],
 "session_shell": ["session_shell", "Option<String>"],
 "cols": ["cols", "u16"],
@@ -259,6 +269,15 @@ ProgressBarMatch: {
 "state": ["state", "Option<ProgressState>"],
 "progress": ["progress", "Option<u8>"],
 },
+ProgramStatusMatch: {
+"id": ["id", "String"],
+"state": ["state", "Option<ProgramState>"],
+"app": ["app", "Option<String>"],
+"title": ["title", "Option<String>"],
+"message": ["message", "Option<String>"],
+"kind": ["kind", "Option<ProgramStatusKind>"],
+"progress": ["progress", "Option<u8>"],
+},
 ClipboardWaitOptions: {
 "regex": ["regex", "Option<bool>"],
 "timeoutMs": ["timeout_ms", "Option<u64>"],
@@ -329,6 +348,18 @@ Error: "error",
 Indeterminate: "indeterminate",
 Paused: "paused",
 },
+ProgramState: {
+Idle: "idle",
+Working: "working",
+Done: "done",
+Blocked: "blocked",
+Error: "error",
+},
+ProgramStatusKind: {
+Permission: "permission",
+Question: "question",
+Auth: "auth",
+},
 Shell: {
 Bash: "bash",
 Powershell: "powershell",
@@ -375,6 +406,8 @@ Before: "before",
 };
 export const Backend = enums.Backend;
 export const ProgressState = enums.ProgressState;
+export const ProgramState = enums.ProgramState;
+export const ProgramStatusKind = enums.ProgramStatusKind;
 export const Shell = enums.Shell;
 export const RecordingFormat = enums.RecordingFormat;
 export const SnapshotResult = enums.SnapshotResult;
@@ -399,6 +432,8 @@ getExitCode: { result: "ExitCode", short: true, args: [] },
 getCwd: { result: "Cwd", short: true, args: [] },
 getTitle: { result: "Title", short: true, args: [] },
 getProgressBar: { result: "ProgressBar", short: true, args: [] },
+getProgramStatuses: { result: "ProgramStatuses", short: true, args: [] },
+getProgramStatus: { result: "ProgramStatus", args: [["id", "String"],] },
 getClipboard: { result: "Clipboard", short: true, args: [] },
 getCursor: { result: "Cursor", short: true, args: [] },
 getModes: { result: "Modes", short: true, args: [] },
@@ -429,6 +464,8 @@ waitTitle: { result: "Unit", args: [["text", "String"],["options", "Option<Title
 expectTitle: { result: "Unit", args: [["text", "String"],["options", "Option<TitleOptions>"],] },
 waitProgressBar: { result: "Unit", args: [["expected", "ProgressBarMatch"],["timeoutMs", "Option<u64>"],] },
 expectProgressBar: { result: "Unit", args: [["expected", "ProgressBarMatch"],["timeoutMs", "Option<u64>"],] },
+waitProgramStatus: { result: "Unit", args: [["expected", "ProgramStatusMatch"],["timeoutMs", "Option<u64>"],] },
+expectProgramStatus: { result: "Unit", args: [["expected", "ProgramStatusMatch"],["timeoutMs", "Option<u64>"],] },
 waitClipboard: { result: "Unit", args: [["text", "Option<String>"],["options", "Option<ClipboardWaitOptions>"],] },
 waitIdle: { result: "Unit", args: [["timeoutMs", "Option<u64>"],] },
 waitCommand: { result: "Unit", args: [["timeoutMs", "Option<u64>"],] },

@@ -12,6 +12,7 @@ pub mod emu;
 pub mod ghostty;
 pub mod integration;
 pub mod locator;
+mod program_status;
 pub mod pty;
 pub(crate) mod reports;
 #[cfg(feature = "rio")]

@@ -52,6 +52,86 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
 }
 
 #[test]
+fn program_status_exit_cleanup_and_diagnostics_are_shared() {
+    use tui_test::{Backend, ProgramState, ProgramStatusMatch};
+    for &backend in Backend::ALL {
+        let session = Session::new(format!(
+            "status-exit-{}-{}",
+            backend.as_str(),
+            std::process::id()
+        ))
+        .with_execution_context(ExecutionContext {
+            artifact: Some(FailureArtifactOptions {
+                mode: FailureArtifactMode::None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let mut options = if cfg!(windows) {
+            run_options("powershell.exe", &[
+                "-NoProfile", "-Command",
+                "[Console]::Write([char]27 + ']7501;state=idle:app=cargo' + [char]7 + [char]27 + ']7501;state=working:id=build' + [char]7 + [char]27 + ']7501;state=done:id=test:msg=RG9uZQ==' + [char]7)",
+            ])
+        } else {
+            run_options("sh", &["-c", "printf '\\033]7501;state=idle:app=cargo\\007\\033]7501;state=working:id=build\\007\\033]7501;state=done:id=test:msg=RG9uZQ==\\007'"])
+        };
+        options.backend = backend;
+        session.run(options).unwrap();
+        session
+            .execute(Operation::WaitExit {
+                timeout_ms: Some(5_000),
+            })
+            .unwrap();
+        let OperationResult::ProgramStatuses(records) =
+            session.execute(Operation::GetProgramStatuses).unwrap()
+        else {
+            panic!("expected statuses");
+        };
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].id, "");
+        assert_eq!(records[1].id, "test");
+        assert_eq!(records[1].app.as_deref(), Some("cargo"));
+        assert_eq!(records[1].message.as_deref(), Some("Done"));
+        assert!(matches!(
+            session
+                .execute(Operation::GetProgramStatus { id: "build".into() })
+                .unwrap(),
+            OperationResult::ProgramStatus(None)
+        ));
+        session
+            .execute(Operation::ExpectProgramStatus {
+                expected: ProgramStatusMatch {
+                    id: "test".into(),
+                    state: Some(ProgramState::Done),
+                    ..Default::default()
+                },
+                timeout_ms: Some(0),
+            })
+            .unwrap();
+        let error = session
+            .execute(Operation::WaitProgramStatus {
+                expected: ProgramStatusMatch {
+                    id: "test".into(),
+                    state: Some(ProgramState::Error),
+                    ..Default::default()
+                },
+                timeout_ms: Some(0),
+            })
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Assertion);
+        assert!(error.message.contains("Done"));
+        assert_eq!(error.details.unwrap().operation, "wait.program_status");
+        let error = session
+            .execute(Operation::GetProgramStatus {
+                id: "invalid//id".into(),
+            })
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Usage);
+        session.close().unwrap();
+    }
+}
+
+#[test]
 fn progress_reports_are_shared_and_wait_failures_keep_current_state() {
     use tui_test::{Backend, ProgressBarMatch, ProgressState};
     for &backend in Backend::ALL {

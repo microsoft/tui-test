@@ -15,6 +15,7 @@ The CLI, JavaScript, Python, and Go must expose their behavior, inputs, and resu
 | Terminal state | `GetCursor`, `GetModes`, `GetColors`, `GetSize`, `GetViewport`, `GetTitle` |
 | Terminal events | `GetClipboard`, `GetBellCount`, `GetBellEvents` |
 | Application progress | `GetProgressBar`, `WaitProgressBar`, `ExpectProgressBar` |
+| Program status | `GetProgramStatuses`, `GetProgramStatus`, `WaitProgramStatus`, `ExpectProgramStatus` |
 | Input | `Write`, `Submit`, `Key` with every `KeyAction`, and `Mouse` with every `MouseAction` |
 | Process and viewport | `Resize`, `Scroll`, `Signal` |
 | Event waits | `WaitTitle`, `WaitClipboard`, `WaitClipboardMatch`, `WaitBell` |
@@ -34,6 +35,9 @@ The operation list alone is not sufficient. The following input and output contr
 - Diagnostics preserve caller context, artifact settings, trace settings, retention, and failure evidence.
 - Results preserve optional values, terminal attributes, match spans, palette entries, event sequence numbers, and snapshot outcomes.
 - Progress results preserve the OSC 9;4 state and optional percentage. Matches compare only supplied fields and validate percentages from 0 to 100.
+- Program statuses preserve OSC 7501 IDs, states, inherited app names, decoded text, request kinds, and optional percentages.
+- Status lists use stable ID order. An empty ID selects the root; an absent record never matches.
+- Status filters compare supplied fields exactly. Omitted IDs select the root, not every record.
 - Packed screens preserve dimensions, UTF-8 bytes, trailing spaces, and blank rows. Byte offsets are not terminal columns.
 
 ## Equivalent interfaces
@@ -62,6 +66,10 @@ They do not share a registry.
 | Progress result | `getProgressBar()` | `get_progress_bar()` | `GetProgressBar()` | `get progress-bar` |
 | Progress wait | `waitProgressBar()` | `wait_progress_bar()` | `WaitProgressBar()` | `wait progress-bar` |
 | Progress assertion | `expectProgressBar()` | `expect_progress_bar()` | `ExpectProgressBar()` | `expect progress-bar` |
+| Program status list | `getProgramStatuses()` | `get_program_statuses()` | `GetProgramStatuses()` | `get program-status` |
+| Program status record | `getProgramStatus(id)` | `get_program_status(id)` | `GetProgramStatus(id)` | `get program-status --id ID` |
+| Program status wait | `waitProgramStatus()` | `wait_program_status()` | `WaitProgramStatus()` | `wait program-status` |
+| Program status assertion | `expectProgramStatus()` | `expect_program_status()` | `ExpectProgramStatus()` | `expect program-status` |
 | Execution context | `context: ExecutionContext` | `context=ExecutionContext(...)` | `Context: *ExecutionContext` | `--context-file PATH` |
 
 The CLI accepts nested Rust `LocatorQuery` JSON through `--query` or `--query-file`.

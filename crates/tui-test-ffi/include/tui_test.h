@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define ABI_VERSION 9
+#define ABI_VERSION 10
 
 /**
  * A thread-owned asynchronous call. Start, poll, and free it on the same thread.
@@ -62,6 +62,16 @@ typedef struct TuiOpenResult {
   struct TuiString recording;
 } TuiOpenResult;
 
+typedef struct TuiProgramStatus {
+  struct TuiString id;
+  struct TuiString state;
+  struct TuiString app;
+  struct TuiString title;
+  struct TuiString message;
+  struct TuiString kind;
+  struct TuiOptionalU64 progress;
+} TuiProgramStatus;
+
 typedef struct TuiProgressBar {
   struct TuiString state;
   struct TuiOptionalU64 progress;
@@ -84,6 +94,8 @@ typedef struct TuiTimeouts {
 } TuiTimeouts;
 
 typedef struct TuiState {
+  const struct TuiProgramStatus *program_statuses;
+  uintptr_t program_statuses_len;
   struct TuiProgressBar progress_bar;
   struct TuiString session_shell;
   uint16_t cols;
@@ -104,6 +116,11 @@ typedef struct TuiState {
   struct TuiTimeouts timeouts;
   struct TuiString text;
 } TuiState;
+
+typedef struct TuiOptionalProgramStatus {
+  bool present;
+  struct TuiProgramStatus value;
+} TuiOptionalProgramStatus;
 
 typedef struct TuiSize {
   uint16_t cols;
@@ -189,6 +206,9 @@ typedef struct TuiResult {
   struct TuiOpenResult open;
   struct TuiState state;
   struct TuiProgressBar progress_bar;
+  struct TuiOptionalProgramStatus program_status;
+  const struct TuiProgramStatus *program_statuses;
+  uintptr_t program_statuses_len;
   struct TuiCursor cursor;
   struct TuiSize size;
   struct TuiViewport viewport;
@@ -325,6 +345,16 @@ typedef struct TuiWaitOptions {
   bool regex;
   bool not_;
 } TuiWaitOptions;
+
+typedef struct TuiProgramStatusMatch {
+  struct TuiString id;
+  struct TuiString state;
+  struct TuiString app;
+  struct TuiString title;
+  struct TuiString message;
+  struct TuiString kind;
+  struct TuiOptionalU64 progress;
+} TuiProgramStatusMatch;
 
 typedef struct TuiProgressBarMatch {
   struct TuiString state;
@@ -738,6 +768,34 @@ struct TuiResult *tui_wait_title(struct TuiString session,
  * Borrowed input buffers must remain valid throughout this call.
  */
 struct TuiResult *tui_get_progress_bar(struct TuiString session);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_get_program_statuses(struct TuiString session);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_get_program_status(struct TuiString session, struct TuiString id);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_wait_program_status(struct TuiString session,
+                                          struct TuiProgramStatusMatch expected,
+                                          struct TuiOptionalU64 timeout_ms);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_expect_program_status(struct TuiString session,
+                                            struct TuiProgramStatusMatch expected,
+                                            struct TuiOptionalU64 timeout_ms);
 
 /**
  * # Safety
@@ -1318,6 +1376,38 @@ struct TuiTask *tui_wait_title_start(struct TuiString session,
  * Inputs follow the synchronous function contract through this call only.
  */
 struct TuiTask *tui_get_progress_bar_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_program_statuses_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_program_status_start(struct TuiString session, struct TuiString id);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_wait_program_status_start(struct TuiString session,
+                                              struct TuiProgramStatusMatch expected,
+                                              struct TuiOptionalU64 timeout_ms);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_expect_program_status_start(struct TuiString session,
+                                                struct TuiProgramStatusMatch expected,
+                                                struct TuiOptionalU64 timeout_ms);
 
 /**
  * Start a typed call after copying all borrowed inputs.

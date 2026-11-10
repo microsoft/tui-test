@@ -147,6 +147,10 @@ impl OperationExpectation {
             Operation::WaitExit { .. } => value("Process", "exits".into()),
             Operation::WaitReady { .. } => value("Shell", "becomes ready".into()),
             Operation::WaitBell { .. } => value("Bell", "a new event arrives".into()),
+            Operation::WaitProgramStatus { expected, .. }
+            | Operation::ExpectProgramStatus { expected, .. } => {
+                value("Program status", format!("{expected:?}"))
+            }
             Operation::WaitProgressBar { expected, .. }
             | Operation::ExpectProgressBar { expected, .. } => {
                 value("Progress bar", format!("{expected:?}"))

@@ -394,6 +394,8 @@ pub struct ScreenHistoryDetails {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalDiagnostics {
     #[serde(default)]
+    pub program_statuses: Vec<crate::api::ProgramStatus>,
+    #[serde(default)]
     pub progress_bar: crate::api::ProgressBar,
     pub size: Size,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -837,6 +839,7 @@ pub struct FailureArtifactManifest {
 
 #[derive(Debug, Clone)]
 pub(crate) struct FailureObservation {
+    pub program_statuses: Vec<crate::api::ProgramStatus>,
     pub progress_bar: crate::api::ProgressBar,
     pub rows: Vec<Vec<EmuCell>>,
     pub cols: u16,
@@ -876,6 +879,7 @@ impl FailureObservation {
 
     pub(crate) fn terminal(&self) -> TerminalDiagnostics {
         TerminalDiagnostics {
+            program_statuses: self.program_statuses.clone(),
             progress_bar: self.progress_bar,
             size: Size {
                 cols: self.cols,
@@ -2084,6 +2088,7 @@ mod tests {
         let emu = AlacrittyEmu::new(1, 1, &Profile::default());
         let rows = emu.viewable_rows();
         let observation = FailureObservation {
+            program_statuses: Vec::new(),
             progress_bar: crate::api::ProgressBar::default(),
             rows: rows.clone(),
             cols: 1,

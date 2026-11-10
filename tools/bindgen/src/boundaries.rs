@@ -98,6 +98,7 @@ const OUTPUTS: &[&str] = &[
     "EffectiveTimeouts",
     "BellEvent",
     "ProgressBar",
+    "ProgramStatus",
     "State",
     "TerminalColors",
     "Cell",
@@ -166,7 +167,12 @@ fn option(ty: &str) -> Option<&str> {
 }
 fn c_type(ty: &str) -> Result<String> {
     Ok(match ty {
-        "ProgressState" | "Option<ProgressState>" => "TuiString".into(),
+        "ProgressState"
+        | "Option<ProgressState>"
+        | "ProgramState"
+        | "Option<ProgramState>"
+        | "ProgramStatusKind"
+        | "Option<ProgramStatusKind>" => "TuiString".into(),
         "String" | "Option<String>" | "PathBuf" | "Option<PathBuf>" => "TuiString".into(),
         "Option<u64>" | "Option<u32>" | "Option<u16>" | "Option<u8>" => "TuiOptionalU64".into(),
         "Option<i32>" => "TuiOptionalI32".into(),
@@ -184,7 +190,8 @@ fn c_output(ty: &str, value: &str) -> Result<String> {
         "Option<String>" => format!("s.optional({value})"),
         "Option<i32>" => format!("integer({value})"),
         "Option<u32>" | "Option<u8>" => format!("TuiOptionalU64 {{ present: {value}.is_some(), value: u64::from({value}.unwrap_or_default()) }}"),
-        "ProgressState" => format!("s.string({value}.as_str().to_owned())"),
+        "ProgressState" | "ProgramState" | "ProgramStatusKind" => format!("s.string({value}.as_str().to_owned())"),
+        "Option<ProgramStatusKind>" => format!("s.optional({value}.map(|v| v.as_str().to_owned()))"),
         "CellColor" => format!("color({value})"),
         t if OUTPUTS.contains(&t) => format!("{}(s, {value})", snake(t)),
         _ => { c_type(ty)?; value.into() }
@@ -217,6 +224,7 @@ fn output_models(models: &Models, c: &mut String, cc: &mut String) -> Result<()>
             let value = format!("v.{field}");
             let array = match f.ty.as_str() {
                 "Vec<TextSpan>" => Some(("TuiSpan", "spans")),
+                "Vec<ProgramStatus>" => Some(("TuiProgramStatus", "program_statuses")),
                 "BTreeMap<String,bool>" => Some(("TuiMode", "modes")),
                 "std::collections::BTreeMap<u8,String>" => Some(("TuiPair", "palette")),
                 _ => None,
@@ -441,6 +449,7 @@ fn input_models(models: &Models, c: &mut String, ci: &mut String) -> Result<()> 
         ("MouseOptions", "MouseOptions"),
         ("Operation::WaitTitle", "WaitOptions"),
         ("ProgressBarMatch", "ProgressBarMatch"),
+        ("ProgramStatusMatch", "ProgramStatusMatch"),
         ("Operation::StartRecording", "RecordingOptions"),
         ("Operation::Screenshot", "ScreenshotOptions"),
         ("Operation::ExpectCursor", "CursorExpectation"),

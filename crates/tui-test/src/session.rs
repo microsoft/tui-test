@@ -314,16 +314,19 @@ impl Session {
                             let mut st = reader_state
                                 .lock()
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            st.emu.process(&buf[..n]);
+                            let TermState { emu, reports, .. } = &mut *st;
+                            let pending = reports.process(emu.as_mut(), &buf[..n]);
                             st.tracker.feed(&buf[..n]);
-                            st.reports.feed(&buf[..n]);
+                            if st.exited.is_some() {
+                                st.reports.finish_process();
+                            }
                             st.visual_revision = st.visual_revision.wrapping_add(1);
                             st.screen_dirty = true;
                             st.mouse_mode.process(&buf[..n]);
                             st.highlight = None;
                             reader_recorder.on_data(&buf[..n]);
                             let _ = try_capture_visual_state(&mut st, false);
-                            st.emu.take_pending_writes()
+                            pending
                         };
                         if !pending.is_empty() {
                             reader_logger.reply(&pending);
@@ -358,6 +361,7 @@ impl Session {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     st.exited = Some(status.code);
+                    st.reports.finish_process();
                     st.exit_signal = status.signal;
                     break;
                 }

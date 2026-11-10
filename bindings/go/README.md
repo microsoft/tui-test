@@ -362,6 +362,28 @@ err := terminal.WaitProgressBar(tuitest.ProgressBarMatch{
 ```
 
 `ExpectProgressBar` accepts the same arguments.
+
+### Program status
+
+`GetProgramStatuses()` lists OSC 7501 records in stable ID order.
+`GetProgramStatus(id)` returns a `*ProgramStatus`, or `nil` when absent.
+An empty ID selects the root. `State.ProgramStatuses` contains the same records.
+Each record contains `ID`, `State`, `App`, `Title`, `Message`, `Kind`, and `Progress`.
+The app value includes inheritance. Text values contain decoded UTF-8.
+
+```go
+err := terminal.WaitProgramStatus(tuitest.ProgramStatusMatch{
+    ID: "build", State: tuitest.Ptr(tuitest.ProgramBlocked),
+}, tuitest.WaitOptions{})
+```
+
+`ExpectProgramStatus` accepts the same arguments.
+Filters compare supplied fields exactly. A zero-value ID selects the root, not every record.
+An absent record never matches. Progress ranges from 0 to 100.
+States are `idle`, `working`, `done`, `blocked`, and `error`.
+Kinds are `permission`, `question`, and `auth`.
+Both methods use the text timeout unless `WaitOptions.Timeout` overrides it.
+Run `go run ./examples/program-status` for a complete example.
 Only non-nil fields participate in a match. An empty match succeeds immediately.
 `WaitOptions.Timeout` overrides the text timeout.
 Run `go run ./examples/progress` for a complete example.

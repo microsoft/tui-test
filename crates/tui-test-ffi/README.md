@@ -18,6 +18,22 @@ An absent state and an absent percentage match any current value.
 The percentage must be from 0 to 100.
 The existing `tui_screenshot` signature remains unchanged; `tui_screenshot_ptr` adds the pointer form.
 
+ABI version 10 adds OSC 7501 program statuses. The CLI uses protocol version 12.
+`tui_get_program_statuses` returns `TuiResult.program_statuses` and `program_statuses_len`.
+`tui_get_program_status` returns `TuiResult.program_status`, a `TuiOptionalProgramStatus`.
+Its `present` flag distinguishes an absent record from the root record.
+`TuiState.program_statuses` contains the same ordered list.
+`tui_wait_program_status` and `tui_expect_program_status` accept `TuiProgramStatusMatch` and an optional timeout.
+The generated `_start` functions copy their inputs before they return.
+
+An absent or empty input ID selects the root. IDs do not act as wildcards.
+Supplied fields match exactly. An absent record never matches.
+States are `idle`, `working`, `done`, `blocked`, and `error`.
+Kinds are `permission`, `question`, and `auth`. Progress ranges from 0 to 100.
+App values include inheritance. Titles and messages contain decoded UTF-8.
+All result strings and list buffers remain valid until `tui_result_free`.
+Free the result exactly once. Do not free its nested buffers separately.
+
 ## Build and use
 
 From the repository root:

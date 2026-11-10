@@ -280,6 +280,27 @@ func (client *Client) GetBellCount() (uint64, error)        { return client.runt
 func (client *Client) GetBellEvents() ([]BellEvent, error)  { return client.runtime.getBellEvents() }
 func (client *Client) GetProgressBar() (ProgressBar, error) { return client.runtime.getProgressBar() }
 
+func (client *Client) GetProgramStatuses() ([]ProgramStatus, error) {
+	return client.runtime.getProgramStatuses()
+}
+
+// GetProgramStatus returns nil when the ID is absent. An empty ID selects the root.
+func (client *Client) GetProgramStatus(id string) (*ProgramStatus, error) {
+	return client.runtime.getProgramStatus(id)
+}
+
+func (client *Client) WaitProgramStatus(expected ProgramStatusMatch, options WaitOptions) error {
+	return client.wait("wait.program_status", options.Timeout, client.options.Timeouts.Text, func(timeout *time.Duration) error {
+		return client.runtime.waitProgramStatus(expected, timeout)
+	})
+}
+
+func (client *Client) ExpectProgramStatus(expected ProgramStatusMatch, options WaitOptions) error {
+	return client.wait("expect.program_status", options.Timeout, client.options.Timeouts.Text, func(timeout *time.Duration) error {
+		return client.runtime.expectProgramStatus(expected, timeout)
+	})
+}
+
 func (client *Client) WaitProgressBar(expected ProgressBarMatch, options WaitOptions) error {
 	return client.wait("wait.progress_bar", options.Timeout, client.options.Timeouts.Text, func(timeout *time.Duration) error {
 		return client.runtime.waitProgressBar(expected, timeout)

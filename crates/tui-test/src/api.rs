@@ -8,6 +8,116 @@ use serde::{Deserialize, Serialize};
 use crate::diagnostics::{FailureArtifactRef, FailureDetails, FailureObservation, FailureReport};
 use crate::shell::Shell;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProgramState {
+    Idle,
+    Working,
+    Done,
+    Blocked,
+    Error,
+}
+
+impl ProgramState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Working => "working",
+            Self::Done => "done",
+            Self::Blocked => "blocked",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProgramStatusKind {
+    Permission,
+    Question,
+    Auth,
+}
+
+impl ProgramStatusKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Permission => "permission",
+            Self::Question => "question",
+            Self::Auth => "auth",
+        }
+    }
+}
+
+/// One OSC 7501 record. An empty id denotes the root; app includes inheritance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramStatus {
+    pub id: String,
+    pub state: ProgramState,
+    pub app: Option<String>,
+    pub title: Option<String>,
+    pub message: Option<String>,
+    pub kind: Option<ProgramStatusKind>,
+    pub progress: Option<u8>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProgramStatusMatch {
+    pub id: String,
+    pub state: Option<ProgramState>,
+    pub app: Option<String>,
+    pub title: Option<String>,
+    pub message: Option<String>,
+    pub kind: Option<ProgramStatusKind>,
+    pub progress: Option<u8>,
+}
+
+impl ProgramStatusMatch {
+    pub fn validate(&self) -> Result<(), TuiTestError> {
+        if !valid_program_status_id(&self.id) {
+            return Err(TuiTestError::usage("invalid program-status id"));
+        }
+        if self.progress.is_some_and(|value| value > 100) {
+            return Err(TuiTestError::usage("progress must be between 0 and 100"));
+        }
+        Ok(())
+    }
+
+    pub fn matches(&self, actual: &ProgramStatus) -> bool {
+        self.id == actual.id
+            && self.state.is_none_or(|value| value == actual.state)
+            && self.kind.is_none_or(|value| Some(value) == actual.kind)
+            && self
+                .progress
+                .is_none_or(|value| Some(value) == actual.progress)
+            && self
+                .app
+                .as_ref()
+                .is_none_or(|value| Some(value) == actual.app.as_ref())
+            && self
+                .title
+                .as_ref()
+                .is_none_or(|value| Some(value) == actual.title.as_ref())
+            && self
+                .message
+                .as_ref()
+                .is_none_or(|value| Some(value) == actual.message.as_ref())
+    }
+}
+
+pub(crate) fn valid_program_status_id(id: &str) -> bool {
+    id.is_empty()
+        || (id.len() <= 128
+            && id.split('/').count() <= 8
+            && id.split('/').all(|segment| {
+                !segment.is_empty()
+                    && segment.len() <= 32
+                    && segment
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"_.+-".contains(&byte))
+            }))
+}
+
 /// The application progress state from OSC 9;4.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -725,6 +835,18 @@ pub enum Operation {
     GetBellCount,
     GetBellEvents,
     GetProgressBar,
+    GetProgramStatuses,
+    GetProgramStatus {
+        id: String,
+    },
+    WaitProgramStatus {
+        expected: ProgramStatusMatch,
+        timeout_ms: Option<u64>,
+    },
+    ExpectProgramStatus {
+        expected: ProgramStatusMatch,
+        timeout_ms: Option<u64>,
+    },
     WaitProgressBar {
         expected: ProgressBarMatch,
         timeout_ms: Option<u64>,
@@ -884,6 +1006,8 @@ impl Operation {
             self,
             Self::WaitTitle { .. }
                 | Self::WaitProgressBar { .. }
+                | Self::WaitProgramStatus { .. }
+                | Self::ExpectProgramStatus { .. }
                 | Self::ExpectProgressBar { .. }
                 | Self::WaitClipboard { .. }
                 | Self::WaitClipboardMatch { .. }
@@ -941,6 +1065,8 @@ pub enum OperationResult {
     BellCount(u64),
     BellEvents(Vec<BellEvent>),
     ProgressBar(ProgressBar),
+    ProgramStatuses(Vec<ProgramStatus>),
+    ProgramStatus(Option<ProgramStatus>),
     Snapshot(SnapshotResult),
     Screenshot(ScreenshotResult),
     Recording(String),
@@ -1173,6 +1299,7 @@ pub struct EffectiveTimeouts {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct State {
+    pub program_statuses: Vec<ProgramStatus>,
     pub progress_bar: ProgressBar,
     pub session_shell: Option<String>,
     pub cols: u16,

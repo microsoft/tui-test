@@ -28,6 +28,7 @@ from tui_test import (
     Profile,
     ProgressBar,
     ProgressBarMatch,
+    ProgramStatusMatch,
     RenderStyle,
     RecordingCursorStyle,
     TuiTest,
@@ -67,6 +68,38 @@ def run(coro):
 
 
 class IntegrationTests(unittest.TestCase):
+    def test_program_status(self):
+        async def scenario():
+            async with self._client(backend="alacritty") as terminal:
+                await terminal.run(
+                    sys.executable, "-u", "-c",
+                    "import sys; sys.stdout.write('\\x1b]7501;state=working:app=demo\\x07"
+                    "\\x1b]7501;state=blocked:id=build:kind=permission:progress=50:title=QnVpbGQ=:msg=SGVsbG8g8J+MjQ==\\x07'); "
+                    "sys.stdout.flush(); sys.stdin.read()", wait_ready=False,
+                )
+                expected = ProgramStatusMatch(id="build", state="blocked", progress=50)
+                await terminal.wait_program_status(expected)
+                await terminal.expect_program_status(ProgramStatusMatch(
+                    id="build", app="demo", title="Build", message="Hello 🌍", kind="permission"))
+                values = await terminal.get_program_statuses()
+                self.assertEqual([value.id for value in values], ["", "build"])
+                self.assertEqual(await terminal.get_program_status("build"), values[1])
+                self.assertEqual(await terminal.get_program_status(), values[0])
+                self.assertIsNone(await terminal.get_program_status("missing"))
+                self.assertEqual((await terminal.state()).program_statuses, values)
+                await terminal.wait_program_status()
+                with self.assertRaises(ExpectationError) as caught:
+                    await terminal.expect_program_status(ProgramStatusMatch(id="missing"), timeout=0)
+                self.assertEqual(caught.exception.details.operation, "expect.program_status")
+                for invalid in [ProgramStatusMatch(state="unknown"), ProgramStatusMatch(kind="unknown"),
+                                ProgramStatusMatch(progress=101), ProgramStatusMatch(id="bad//id")]:
+                    with self.assertRaises(UsageError):
+                        await terminal.wait_program_status(invalid)
+                with self.assertRaises(UsageError):
+                    await terminal.get_program_status("bad//id")
+                self.assertEqual(expected, ProgramStatusMatch(id="build", state="blocked", progress=50))
+        run(scenario())
+
     def test_progress_bar(self):
         async def scenario():
             async with self._client(backend="alacritty") as terminal:

@@ -36,6 +36,12 @@ pub struct TuiOptionalF64 {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+pub struct TuiOptionalProgramStatus {
+    pub present: bool,
+    pub value: TuiProgramStatus,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub struct TuiPair {
     pub key: TuiString,
     pub value: TuiString,
@@ -80,6 +86,9 @@ pub struct TuiResult {
     pub open: TuiOpenResult,
     pub state: TuiState,
     pub progress_bar: TuiProgressBar,
+    pub program_status: TuiOptionalProgramStatus,
+    pub program_statuses: *const TuiProgramStatus,
+    pub program_statuses_len: usize,
     pub cursor: TuiCursor,
     pub size: TuiSize,
     pub viewport: TuiViewport,
@@ -137,7 +146,20 @@ pub struct TuiProgressBar {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+pub struct TuiProgramStatus {
+    pub id: TuiString,
+    pub state: TuiString,
+    pub app: TuiString,
+    pub title: TuiString,
+    pub message: TuiString,
+    pub kind: TuiString,
+    pub progress: TuiOptionalU64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub struct TuiState {
+    pub program_statuses: *const TuiProgramStatus,
+    pub program_statuses_len: usize,
     pub progress_bar: TuiProgressBar,
     pub session_shell: TuiString,
     pub cols: u16,
@@ -327,6 +349,17 @@ pub struct TuiWaitOptions {
 #[derive(Clone, Copy, Default)]
 pub struct TuiProgressBarMatch {
     pub state: TuiString,
+    pub progress: TuiOptionalU64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TuiProgramStatusMatch {
+    pub id: TuiString,
+    pub state: TuiString,
+    pub app: TuiString,
+    pub title: TuiString,
+    pub message: TuiString,
+    pub kind: TuiString,
     pub progress: TuiOptionalU64,
 }
 #[repr(C)]

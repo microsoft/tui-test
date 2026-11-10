@@ -13,8 +13,16 @@ struct Storage {
     strings: Vec<TuiString>,
     modes: Vec<TuiMode>,
     pairs: Vec<TuiPair>,
+    program_statuses: Vec<TuiProgramStatus>,
 }
 impl Storage {
+    fn program_statuses(&mut self, values: Vec<ProgramStatus>) -> (*const TuiProgramStatus, usize) {
+        for value in values {
+            let value = program_status(self, value);
+            self.program_statuses.push(value);
+        }
+        (self.program_statuses.as_ptr(), self.program_statuses.len())
+    }
     fn bytes(&mut self, value: Vec<u8>) -> TuiString {
         let value = value.into_boxed_slice();
         let output = TuiString {
@@ -140,6 +148,15 @@ pub(crate) fn operation(value: OperationResult) -> *mut TuiResult {
         OperationResult::Open(v) => r.open = open_value(&mut s, v),
         OperationResult::State(v) => r.state = state(&mut s, *v),
         OperationResult::ProgressBar(v) => r.progress_bar = progress_bar(&mut s, v),
+        OperationResult::ProgramStatuses(v) => {
+            (r.program_statuses, r.program_statuses_len) = s.program_statuses(v);
+        }
+        OperationResult::ProgramStatus(v) => {
+            r.program_status = TuiOptionalProgramStatus {
+                present: v.is_some(),
+                value: v.map(|v| program_status(&mut s, v)).unwrap_or_default(),
+            };
+        }
         OperationResult::Text(v)
         | OperationResult::Clipboard(v)
         | OperationResult::Recording(v) => r.text = s.string(v),

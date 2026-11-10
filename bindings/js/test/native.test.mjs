@@ -545,6 +545,8 @@ test("generated native declarations expose typed operations", async () => {
   );
   for (const type of [
     "BellEvent",
+    "ProgramStatus",
+    "ProgramStatusMatch",
     "OpenResult",
     "State",
     "Cursor",
@@ -574,6 +576,10 @@ test("generated native declarations expose typed operations", async () => {
     "getClipboard",
     "getBellCount",
     "getBellEvents",
+    "getProgramStatuses",
+    "getProgramStatus",
+    "waitProgramStatus",
+    "expectProgramStatus",
     "write",
     "type",
     "submit",

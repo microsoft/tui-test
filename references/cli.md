@@ -229,6 +229,7 @@ or the [Rust example](../crates/tui-test/examples/scrollback.rs).
 | `wait clipboard [TEXT]` | Wait for a clipboard change or match. |
 | `wait bell` | Wait for a bell. |
 | `wait progress-bar [--state STATE] [--progress N]` | Wait for an OSC 9;4 progress match. |
+| `wait program-status [--id ID] [--state STATE]` | Wait for an OSC 7501 status match. |
 | `wait text TEXT [--not]` | Wait for visible or absent text, with the existing selector and style flags. |
 | `wait query --query-file PATH [--not]` | Wait for a nested locator query or its absence. |
 
@@ -260,7 +261,29 @@ See the [ConPTY asset README](../crates/tui-test/assets/conpty/README.md) for it
 source, version, and update instructions.
 
 Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
-`size`, `title`, `clipboard`, `bells`, `bell-events`, and `progress-bar`.
+`size`, `title`, `clipboard`, `bells`, `bell-events`, `progress-bar`, and `program-status`.
+
+`get program-status` lists OSC 7501 records in stable ID order.
+`get program-status --id ID` returns one record, or `null` when the ID is absent.
+Use `--id ""` to read the root record.
+Records contain `id`, `state`, `app`, `title`, `message`, `kind`, and `progress`.
+The app value includes inheritance. Text values contain decoded UTF-8.
+
+`wait program-status` and `expect program-status` select the root by default.
+They accept `--id`, `--state`, `--kind`, `--progress`, `--app`, `--title`, and `--message`.
+Supplied fields must match exactly. An absent record never matches.
+States are `idle`, `working`, `done`, `blocked`, and `error`.
+Kinds are `permission`, `question`, and `auth`. Progress ranges from 0 to 100.
+Both commands accept `--timeout MS` and use the text timeout by default.
+
+```sh
+tui-test run python3 -u -c 'import sys; print("\033]7501;state=blocked:id=build:kind=permission:title=QnVpbGQ=\007", end="", flush=True); sys.stdin.read()'
+tui-test wait program-status --id build --state blocked
+tui-test expect program-status --id build --title Build
+tui-test get program-status
+tui-test get program-status --id build
+tui-test close
+```
 
 `get progress-bar` returns the current `state` and `progress` percentage.
 States are `inactive`, `normal`, `error`, `indeterminate`, and `paused`.
@@ -293,6 +316,7 @@ Byte offsets are not cell offsets for Unicode text.
 | `expect exit-code CODE` | Assert the last exit code. |
 | `expect bell COUNT` | Wait until the cumulative bell count reaches `COUNT`. |
 | `expect progress-bar [--state STATE] [--progress N]` | Assert an OSC 9;4 progress match. |
+| `expect program-status [--id ID] [--state STATE]` | Assert an OSC 7501 status match. |
 | `expect snapshot NAME [-u] [--include-style] [--include-title] [--cwd DIR]` | Assert a snapshot. |
 
 Snapshot `--cwd` selects the baseline root. The default is the client's working directory.

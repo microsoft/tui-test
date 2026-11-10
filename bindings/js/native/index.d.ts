@@ -44,7 +44,18 @@ export interface ProgressBar {
   progress: number | null
 }
 
+export interface ProgramStatus {
+  id: string
+  state: ProgramState
+  app: string | null
+  title: string | null
+  message: string | null
+  kind: ProgramStatusKind | null
+  progress: number | null
+}
+
 export interface State {
+  program_statuses: Array<ProgramStatus>
   progress_bar: ProgressBar
   session_shell: string | null
   cols: number
@@ -294,6 +305,16 @@ export interface ProgressBarMatch {
   progress?: number
 }
 
+export interface ProgramStatusMatch {
+  id: string
+  state?: ProgramState
+  app?: string
+  title?: string
+  message?: string
+  kind?: ProgramStatusKind
+  progress?: number
+}
+
 export interface ClipboardWaitOptions {
   regex?: boolean
   timeoutMs?: number
@@ -372,6 +393,20 @@ export declare const enum ProgressState {
   Paused = "paused",
 }
 
+export declare const enum ProgramState {
+  Idle = "idle",
+  Working = "working",
+  Done = "done",
+  Blocked = "blocked",
+  Error = "error",
+}
+
+export declare const enum ProgramStatusKind {
+  Permission = "permission",
+  Question = "question",
+  Auth = "auth",
+}
+
 export declare const enum Shell {
   Bash = "bash",
   Powershell = "powershell",
@@ -446,6 +481,8 @@ export declare class NativeSession {
   getCwd(): Promise<string | null>
   getTitle(): Promise<string | null>
   getProgressBar(): Promise<ProgressBar>
+  getProgramStatuses(): Promise<Array<ProgramStatus>>
+  getProgramStatus(id: string): Promise<ProgramStatus | null>
   getClipboard(): Promise<string>
   getCursor(): Promise<Cursor>
   getModes(): Promise<Record<string, boolean>>
@@ -476,6 +513,8 @@ export declare class NativeSession {
   expectTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
   waitProgressBar(expected: ProgressBarMatch, timeoutMs?: number | undefined | null): Promise<void>
   expectProgressBar(expected: ProgressBarMatch, timeoutMs?: number | undefined | null): Promise<void>
+  waitProgramStatus(expected: ProgramStatusMatch, timeoutMs?: number | undefined | null): Promise<void>
+  expectProgramStatus(expected: ProgramStatusMatch, timeoutMs?: number | undefined | null): Promise<void>
   waitClipboard(text?: string | undefined | null, options?: ClipboardWaitOptions | undefined | null): Promise<void>
   waitIdle(timeoutMs?: number | undefined | null): Promise<void>
   waitCommand(timeoutMs?: number | undefined | null): Promise<void>

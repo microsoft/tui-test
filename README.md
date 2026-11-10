@@ -200,6 +200,40 @@ Run the portable example against every enabled backend:
 cargo run -p tui-test-rs --example progress_bar --all-features
 ```
 
+## Program status
+
+All four backends support the [OSC 7501 program-status protocol](https://www.superlogical.com/rex/docs/build/program-status).
+Records describe idle, active, blocked, completed, or failed work.
+They remain separate from OSC 9;4 progress reports and do not change terminal text.
+
+```sh
+tui-test get program-status
+tui-test get program-status --id build/test
+tui-test wait program-status --id build/test --state done
+tui-test expect program-status --id auth --state blocked --kind permission
+```
+
+In Rust, use `Operation::GetProgramStatuses`, `Operation::GetProgramStatus`,
+`Operation::WaitProgramStatus`, and `Operation::ExpectProgramStatus`.
+Waits and assertions use `ProgramStatusMatch`. Omitted fields do not restrict the match.
+The default ID is the root, represented by an empty string.
+A missing record never matches. A single-record lookup returns `None` if the record is absent.
+Lists use ID order. Text matches are exact; title and message values contain decoded UTF-8.
+The `app` field includes inheritance from the nearest ancestor.
+
+Reports replace records completely. Clear removes the addressed record and its descendants.
+A full reset removes all records; screen switches and soft resets preserve them.
+Process exit and shell prompts remove working and blocked records, but preserve completed and failed records.
+The engine applies protocol limits and rejects malformed reports atomically.
+Capability replies preserve order relative to native terminal replies.
+Session state and failure diagnostics include `program_statuses`.
+
+Run the portable example against every enabled backend:
+
+```sh
+cargo run -p tui-test-rs --example program_status --all-features
+```
+
 ## API references
 
 | Surface | Reference |

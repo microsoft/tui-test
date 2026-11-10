@@ -145,7 +145,7 @@ fn viewport_result_preserves_native_count_width() {
         assert_eq!((*result).viewport.history, usize::MAX);
         tui_result_free(result);
     }
-    assert_eq!(tui_abi_version(), 9);
+    assert_eq!(tui_abi_version(), 10);
 }
 
 #[test]
@@ -163,6 +163,127 @@ fn progress_bar_output_preserves_zero_and_absence() {
             );
             tui_result_free(result);
         }
+    }
+}
+#[test]
+fn program_status_inputs_preserve_root_and_validate_filters() {
+    unsafe {
+        assert_eq!(
+            program_status_match(TuiProgramStatusMatch::default()).unwrap(),
+            ProgramStatusMatch::default()
+        );
+        let expected = program_status_match(TuiProgramStatusMatch {
+            id: text("build"),
+            message: text(""),
+            progress: TuiOptionalU64 {
+                present: true,
+                value: 0,
+            },
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(expected.id, "build");
+        assert_eq!(expected.message.as_deref(), Some(""));
+        assert_eq!(expected.progress, Some(0));
+        for invalid in [
+            TuiProgramStatusMatch {
+                id: text("bad//id"),
+                ..Default::default()
+            },
+            TuiProgramStatusMatch {
+                state: text("unknown"),
+                ..Default::default()
+            },
+            TuiProgramStatusMatch {
+                kind: text("unknown"),
+                ..Default::default()
+            },
+            TuiProgramStatusMatch {
+                progress: TuiOptionalU64 {
+                    present: true,
+                    value: 101,
+                },
+                ..Default::default()
+            },
+            TuiProgramStatusMatch {
+                progress: TuiOptionalU64 {
+                    present: true,
+                    value: 256,
+                },
+                ..Default::default()
+            },
+        ] {
+            assert!(program_status_match(invalid).is_err());
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn program_status_native_child_reads_and_waits() {
+    unsafe fn success(result: *mut TuiResult) {
+        assert_eq!(unsafe { error_kind(result) }, 0, "{}", unsafe {
+            message(result)
+        });
+        unsafe { tui_result_free(result) };
+    }
+    unsafe {
+        let session = text(r#"{"name":"ffi-program-status"}"#);
+        let arguments = [text("-c"), text("printf '\\033]7501;state=working:app=demo\\007\\033]7501;state=blocked:id=build:kind=permission:progress=0:title=QnVpbGQ=:msg=SGVsbG8g8J+MjQ==\\007'; read value")];
+        success(tui_run(
+            session,
+            TuiOpenOptions {
+                backend: text("alacritty"),
+                wait_ready: TuiOptionalBool {
+                    present: true,
+                    value: false,
+                },
+                ..Default::default()
+            },
+            text("sh"),
+            arguments.as_ptr(),
+            arguments.len(),
+        ));
+        success(tui_wait_program_status(
+            session,
+            TuiProgramStatusMatch {
+                id: text("build"),
+                state: text("blocked"),
+                ..Default::default()
+            },
+            TuiOptionalU64 {
+                present: true,
+                value: 5000,
+            },
+        ));
+        success(tui_expect_program_status(
+            session,
+            TuiProgramStatusMatch {
+                id: text("build"),
+                app: text("demo"),
+                message: text("Hello 🌍"),
+                ..Default::default()
+            },
+            TuiOptionalU64::default(),
+        ));
+        let result = tui_get_program_statuses(session);
+        assert_eq!(error_kind(result), 0);
+        let values =
+            std::slice::from_raw_parts((*result).program_statuses, (*result).program_statuses_len);
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].id.required().unwrap(), "");
+        assert_eq!(values[1].id.required().unwrap(), "build");
+        assert_eq!(values[1].title.required().unwrap(), "Build");
+        assert_eq!(values[1].kind.required().unwrap(), "permission");
+        assert_eq!(values[1].progress.option(), Some(0));
+        tui_result_free(result);
+        for (id, present) in [("", true), ("build", true), ("missing", false)] {
+            let result = tui_get_program_status(session, text(id));
+            assert_eq!(error_kind(result), 0);
+            assert_eq!((*result).program_status.present, present);
+            tui_result_free(result);
+        }
+        success(tui_close(session, TuiOptionalBool::default()));
     }
 }
 

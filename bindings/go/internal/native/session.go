@@ -380,6 +380,68 @@ func (runtime *Session) GetProgressBar() (ProgressBar, error) {
 	return value, err
 }
 
+func (runtime *Session) GetProgramStatuses() ([]ProgramStatus, error) {
+	var values []ProgramStatus
+	err := runtime.read(func(session abiString, _ *nativeMemory) *abiResult {
+		return nativeFunctions.GetProgramStatuses(session)
+	}, func(result *abiResult) {
+		values = nativeProgramStatuses(result.programStatuses, result.programStatusesLen)
+	})
+	return values, err
+}
+
+func (runtime *Session) GetProgramStatus(id string) (*ProgramStatus, error) {
+	var value *ProgramStatus
+	err := runtime.read(func(session abiString, memory *nativeMemory) *abiResult {
+		return nativeFunctions.GetProgramStatus(session, memory.text(id))
+	}, func(result *abiResult) {
+		if result.programStatus.present {
+			value = pointerTo(nativeProgramStatus(result.programStatus.value))
+		}
+	})
+	return value, err
+}
+
+func (runtime *Session) programStatus(expected ProgramStatusMatch, timeout *time.Duration, expect bool) error {
+	duration, err := nativeDuration(timeout)
+	if err != nil {
+		return err
+	}
+	return runtime.unit(func(session abiString, memory *nativeMemory) *abiResult {
+		value := abiProgramStatusMatch{id: memory.text(expected.ID)}
+		if expected.State != nil {
+			value.state = memory.text(string(*expected.State))
+		}
+		if expected.Kind != nil {
+			value.kind = memory.text(string(*expected.Kind))
+		}
+		if expected.App != nil {
+			value.app = memory.text(*expected.App)
+		}
+		if expected.Title != nil {
+			value.title = memory.text(*expected.Title)
+		}
+		if expected.Message != nil {
+			value.message = memory.text(*expected.Message)
+		}
+		if expected.Progress != nil {
+			value.progress = abiOptionalU64{present: true, value: uint64(*expected.Progress)}
+		}
+		if expect {
+			return nativeFunctions.ExpectProgramStatus(session, value, duration)
+		}
+		return nativeFunctions.WaitProgramStatus(session, value, duration)
+	})
+}
+
+func (runtime *Session) WaitProgramStatus(expected ProgramStatusMatch, timeout *time.Duration) error {
+	return runtime.programStatus(expected, timeout, false)
+}
+
+func (runtime *Session) ExpectProgramStatus(expected ProgramStatusMatch, timeout *time.Duration) error {
+	return runtime.programStatus(expected, timeout, true)
+}
+
 func (runtime *Session) progressBar(expected ProgressBarMatch, timeout *time.Duration, expect bool) error {
 	duration, err := nativeDuration(timeout)
 	if err != nil {
