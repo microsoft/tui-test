@@ -62,6 +62,11 @@ function validate(type, value, label) {
   const fields = models[type];
   if (!fields) throw error("internal", `unknown native model ${type}`);
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
+  if (type === "ProgressBarMatch") {
+    for (const key of Object.keys(value)) {
+      if (!Object.hasOwn(fields, key)) throw new TypeError(`unknown progress field ${JSON.stringify(key)}`);
+    }
+  }
   if (type.startsWith("Locator") || ["RenderStyle", "FontFamilies", "WindowStyle", "BorderStyle", "ShadowStyle", "RecordingCursorStyle", "PaddingSides"].includes(type)) {
     for (const key of Object.keys(value)) {
       if (!Object.hasOwn(fields, key)) throw new TypeError(`unknown ${type.startsWith("Locator") ? "locator" : "rendering style"} field ${JSON.stringify(key)}`);
@@ -153,6 +158,7 @@ function resultValue(result, selector) {
     case "Unit": return undefined;
     case "Open": return decode("TuiOpenResult", result.open);
     case "State": return decode("TuiState", result.state);
+    case "ProgressBar": return decode("TuiProgressBar", result.progress_bar);
     case "Cursor": return decode("TuiCursor", result.cursor);
     case "Modes": return Object.fromEntries(array("TuiMode", result.modes, result.modes_len).map((mode) => [mode.name, mode.enabled]));
     case "Colors": return decode("TuiTerminalColors", result.colors);
@@ -380,6 +386,7 @@ export function createAdapter(functions) {
         case "mouseDrag": native = [v.x1, v.y1, v.x2, v.y2, v.button ?? mouseDefault()]; break;
         case "mouseScroll": native = [s(v.direction), v.amount ?? 3]; break;
         case "waitTitle": case "expectTitle": case "waitClipboard": native = [s(v.text), wait(options)]; break;
+        case "waitProgressBar": case "expectProgressBar": native = [input.struct("TuiProgressBarMatch", v.expected), u(v.timeoutMs)]; break;
         case "waitIdle": case "waitCommand": case "waitExit": case "waitReady": case "waitBell": native = [u(v.timeoutMs)]; break;
         case "findLocator": native = [input.struct("TuiQuery", locator(v.expression)), v.requireOne ?? false]; break;
         case "waitLocator": case "expectLocator": native = [input.struct("TuiQuery", locator(v.expression)), wait({ not: v.not, timeout_ms: v.timeoutMs })]; break;

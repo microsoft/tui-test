@@ -348,6 +348,24 @@ Asciicast remains a timestamped output stream; FPS sampling does not change it.
 
 `ExpectSnapshot` returns `SnapshotPassed`, `SnapshotWritten`, or `SnapshotUpdated`. Set `SnapshotOptions.Update` only when you intend to update the baseline. Snapshot options also control style and title inclusion and the snapshot working directory.
 
+## Progress bars
+
+`GetProgressBar()` returns a `ProgressBar` from OSC 9;4 reports.
+`State.ProgressBar` contains the same data.
+`ProgressState` defines `ProgressInactive`, `ProgressNormal`, `ProgressError`, `ProgressIndeterminate`, and `ProgressPaused`.
+`Progress` points to a percentage from 0 to 100, or is `nil` when unavailable.
+
+```go
+err := terminal.WaitProgressBar(tuitest.ProgressBarMatch{
+    State: tuitest.Ptr(tuitest.ProgressNormal),
+}, tuitest.WaitOptions{})
+```
+
+`ExpectProgressBar` accepts the same arguments.
+Only non-nil fields participate in a match. An empty match succeeds immediately.
+`WaitOptions.Timeout` overrides the text timeout.
+Run `go run ./examples/progress` for a complete example.
+
 ## Test cleanup
 
 The `tuitesttest` package creates unique sessions and registers cleanup before starting the terminal. It closes the session when the test ends, including after a fatal test failure.

@@ -50,6 +50,7 @@ pub struct TermState {
     /// Shell-integration state, derived from the raw PTY stream rather than
     /// the emulator, so it is identical across backends.
     pub tracker: CommandTracker,
+    pub(crate) reports: crate::terminal::reports::Reports,
     pub(crate) mouse_mode: MouseModeTracker,
     pub observed_clipboard_revision: u64,
     pub started_at: Instant,
@@ -217,6 +218,7 @@ impl Session {
             #[cfg(feature = "recording-raster")]
             recording_frames: None,
             tracker: CommandTracker::new(),
+            reports: crate::terminal::reports::Reports::default(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
             started_at,
@@ -314,6 +316,7 @@ impl Session {
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
                             st.emu.process(&buf[..n]);
                             st.tracker.feed(&buf[..n]);
+                            st.reports.feed(&buf[..n]);
                             st.visual_revision = st.visual_revision.wrapping_add(1);
                             st.screen_dirty = true;
                             st.mouse_mode.process(&buf[..n]);
@@ -1409,6 +1412,7 @@ mod tests {
             #[cfg(feature = "recording-raster")]
             recording_frames: None,
             tracker: CommandTracker::new(),
+            reports: crate::terminal::reports::Reports::default(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
             started_at,

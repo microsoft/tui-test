@@ -470,6 +470,19 @@ class NativeSession:
     async def get_title(self):
         return await self._call("get_title", kind="text")
 
+    async def get_progress_bar(self):
+        return await self._call("get_progress_bar", kind="progress_bar")
+
+    async def wait_progress_bar(self, state, progress, timeout_ms):
+        expected = abi.TuiProgressBarMatch(
+            state=_string(state), progress=_optional(progress, "progress", 8))
+        return await self._call("wait_progress_bar", expected, _optional(timeout_ms))
+
+    async def expect_progress_bar(self, state, progress, timeout_ms):
+        expected = abi.TuiProgressBarMatch(
+            state=_string(state), progress=_optional(progress, "progress", 8))
+        return await self._call("expect_progress_bar", expected, _optional(timeout_ms))
+
     async def get_clipboard(self):
         return await self._call("get_clipboard", kind="text")
 

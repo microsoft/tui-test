@@ -1856,6 +1856,7 @@ fn capture_failure_observation_locked(
         target_arch: std::env::consts::ARCH.to_string(),
     };
     FailureObservation {
+        progress_bar: state.reports.progress_bar(),
         rows: snapshot.rows,
         cols: snapshot.cols,
         title: snapshot.title,
@@ -1995,6 +1996,7 @@ fn dispatch(
         session,
         request_cancelled: cancelled,
     };
+    let operation_name = diagnostic_operation_name(&operation);
     match operation {
         Operation::State => Ok(OperationResult::State(Box::new(state(session)))),
         Operation::Text { full } => Ok(OperationResult::Text(text_of(&grid(session, full)))),
@@ -2131,6 +2133,30 @@ fn dispatch(
             Ok(OperationResult::Unit)
         }
         Operation::GetBellCount => Ok(OperationResult::BellCount(session.bells.count())),
+        Operation::GetProgressBar => Ok(OperationResult::ProgressBar(
+            session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .reports
+                .progress_bar(),
+        )),
+        Operation::WaitProgressBar {
+            expected,
+            timeout_ms,
+        }
+        | Operation::ExpectProgressBar {
+            expected,
+            timeout_ms,
+        } => {
+            expect_progress_bar(
+                &waiting,
+                expected,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+                operation_name,
+            )?;
+            Ok(OperationResult::Unit)
+        }
         Operation::GetBellEvents => {
             Ok(OperationResult::BellEvents(session.bells.snapshot().events))
         }
@@ -2382,6 +2408,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
     let (cols, rows) = state.emu.size();
     let bells = session.bells.snapshot();
     crate::api::State {
+        progress_bar: state.reports.progress_bar(),
         session_shell: session.shell.map(|value| value.as_str().to_string()),
         cols,
         rows,
@@ -4259,6 +4286,51 @@ fn expect_output(session: &TerminalSession, text: &str, regex: bool) -> Result<(
         Err(TuiTestError::assertion(format!(
             "output did not contain '{text}'\n---\n{output}\n---"
         )))
+    }
+}
+
+fn expect_progress_bar(
+    session: &WaitContext<'_>,
+    expected: crate::api::ProgressBarMatch,
+    timeout_ms: u64,
+    operation_name: &'static str,
+) -> Result<(), TuiTestError> {
+    expected.validate()?;
+    let current = || {
+        session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reports
+            .progress_bar()
+    };
+    let mut actual = current();
+    poll_until(
+        session,
+        || {
+            actual = current();
+            expected.matches(&actual) || session_stopped(session)
+        },
+        timeout_ms,
+    )?;
+    if expected.matches(&actual) {
+        Ok(())
+    } else {
+        let reason = if session_stopped(session) {
+            FailureReason::SessionExited
+        } else {
+            FailureReason::TimedOut
+        };
+        Err(observed_comparison_failure(
+            session,
+            operation_name,
+            Some(timeout_ms),
+            reason,
+            format!("expected progress bar {expected:?}; current state is {actual:?}"),
+            "progress_bar",
+            Some(format!("{expected:?}")),
+            Some(format!("{actual:?}")),
+        ))
     }
 }
 

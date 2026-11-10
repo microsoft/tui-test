@@ -22,6 +22,34 @@ import { NativeRuntime } from "../dist/native.js";
 import { withTerminal } from "../dist/test/index.js";
 
 const shell = process.platform === "win32" ? "pwsh" : undefined;
+
+test("OSC progress bar supports partial matches, state reads, and errors", async () => {
+  const terminal = TuiTest.ephemeral("progress-bar", { backend: "alacritty" });
+  try {
+    await terminal.run(process.execPath, runtimeScript(`
+      process.stdout.write("\\x1b]9;4;1;50\\x07");
+      process.stdin.on("data", () => process.stdout.write("\\x1b]9;4;3\\x07"));
+    `), { waitReady: false });
+    const expected = Object.freeze({ state: "normal", progress: 50 });
+    await terminal.waitProgressBar(expected);
+    assert.deepEqual(await terminal.getProgressBar(), expected);
+    assert.deepEqual((await terminal.state()).progress_bar, expected);
+    await terminal.expectProgressBar({ progress: 50 });
+    await terminal.waitProgressBar({});
+    await assert.rejects(terminal.expectProgressBar({ state: "paused" }, { timeout: 0 }), (error) => {
+      assert.ok(error instanceof ExpectationError);
+      assert.equal(error.details.operation, "expect.progress_bar");
+      return true;
+    });
+    await assert.rejects(terminal.waitProgressBar({ progress: 101 }), UsageError);
+    await assert.rejects(terminal.waitProgressBar({ unknown: 1 }), UsageError);
+    await terminal.submit("next");
+    await terminal.waitProgressBar({ state: "indeterminate" });
+    assert.deepEqual(await terminal.getProgressBar(), { state: "indeterminate", progress: 50 });
+  } finally {
+    await terminal.closeQuiet();
+  }
+});
 const evalArgs =
   typeof globalThis.Deno === "undefined"
     ? ["-e", "console.log('ready'); setInterval(() => {}, 1000)"]

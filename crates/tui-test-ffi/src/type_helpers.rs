@@ -78,6 +78,7 @@ pub struct TuiResult {
     pub exit_code: TuiOptionalI32,
     pub open: TuiOpenResult,
     pub state: TuiState,
+    pub progress_bar: TuiProgressBar,
     pub cursor: TuiCursor,
     pub size: TuiSize,
     pub viewport: TuiViewport,

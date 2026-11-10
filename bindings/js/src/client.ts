@@ -24,6 +24,8 @@ import type {
 } from "./native.js";
 import type {
   BellEvent,
+  ProgressBar,
+  ProgressBarMatch,
   Cell,
   ClientOptions,
   Cursor,
@@ -1046,6 +1048,22 @@ export class TuiTest {
 
   async getTitle(): Promise<string | null> {
     return this.#runtime.getTitle();
+  }
+
+  async getProgressBar(): Promise<ProgressBar> {
+    return this.#runtime.getProgressBar();
+  }
+
+  async waitProgressBar(expected: ProgressBarMatch = {}, opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("wait.progress_bar", () =>
+      this.#runtime.waitProgressBar(expected, this.#timeout("text", opts.timeout)),
+    );
+  }
+
+  async expectProgressBar(expected: ProgressBarMatch = {}, opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("expect.progress_bar", () =>
+      this.#runtime.expectProgressBar(expected, this.#timeout("text", opts.timeout)),
+    );
   }
 
   async getClipboard(): Promise<string> {

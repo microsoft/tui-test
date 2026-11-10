@@ -6,7 +6,7 @@ import (
 	"unsafe"
 )
 
-const abiVersion = 7
+const abiVersion = 9
 
 type abiString struct {
 	_    structs.HostLayout
@@ -69,6 +69,7 @@ type abiResult struct {
 	exitCode      abiOptionalI32
 	open          abiOpenResult
 	state         abiState
+	progressBar   abiProgressBar
 	cursor        abiCursor
 	size          abiSize
 	viewport      abiViewport
@@ -113,8 +114,14 @@ type abiBellEvent struct {
 	sequence  uint64
 	elapsedMS uint64
 }
+type abiProgressBar struct {
+	_        structs.HostLayout
+	state    abiString
+	progress abiOptionalU64
+}
 type abiState struct {
 	_            structs.HostLayout
+	progressBar  abiProgressBar
 	sessionShell abiString
 	cols         uint16
 	rows         uint16
@@ -280,6 +287,11 @@ type abiWaitOptions struct {
 	timeoutMS abiOptionalU64
 	regex     bool
 	not       bool
+}
+type abiProgressBarMatch struct {
+	_        structs.HostLayout
+	state    abiString
+	progress abiOptionalU64
 }
 type abiRecordingOptions struct {
 	_             structs.HostLayout

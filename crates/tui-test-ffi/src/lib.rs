@@ -15,7 +15,7 @@ pub use types::*;
 mod tasks_generated;
 pub use tasks_generated::*;
 
-pub const ABI_VERSION: u32 = 7;
+pub const ABI_VERSION: u32 = 9;
 
 type Result<T> = std::result::Result<T, TuiTestError>;
 fn boundary(f: impl FnOnce() -> Result<OperationResult>) -> *mut TuiResult {
@@ -689,6 +689,68 @@ pub unsafe extern "C" fn tui_wait_title(
         })
     }
 }
+
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_get_progress_bar(session: TuiString) -> *mut TuiResult {
+    unsafe { execute(session, "getProgressBar", || Ok(Operation::GetProgressBar)) }
+}
+
+unsafe fn progress_bar_match(value: TuiProgressBarMatch) -> Result<ProgressBarMatch> {
+    let state = unsafe { value.state.optional()? }
+        .map(|state| {
+            serde_json::from_value(serde_json::Value::String(state))
+                .map_err(|error| TuiTestError::usage(error.to_string()))
+        })
+        .transpose()?;
+    let progress = value
+        .progress
+        .option()
+        .map(|value| {
+            u8::try_from(value)
+                .map_err(|_| TuiTestError::usage("progress must be between 0 and 100"))
+        })
+        .transpose()?;
+    Ok(ProgressBarMatch { state, progress })
+}
+
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_wait_progress_bar(
+    session: TuiString,
+    expected: TuiProgressBarMatch,
+    timeout_ms: TuiOptionalU64,
+) -> *mut TuiResult {
+    unsafe {
+        execute(session, "wait.progress_bar", || {
+            Ok(Operation::WaitProgressBar {
+                expected: progress_bar_match(expected)?,
+                timeout_ms: timeout_ms.option(),
+            })
+        })
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_expect_progress_bar(
+    session: TuiString,
+    expected: TuiProgressBarMatch,
+    timeout_ms: TuiOptionalU64,
+) -> *mut TuiResult {
+    unsafe {
+        execute(session, "expect.progress_bar", || {
+            Ok(Operation::ExpectProgressBar {
+                expected: progress_bar_match(expected)?,
+                timeout_ms: timeout_ms.option(),
+            })
+        })
+    }
+}
+
 #[no_mangle]
 /// # Safety
 /// Borrowed input buffers must be valid and readable for their stated lengths

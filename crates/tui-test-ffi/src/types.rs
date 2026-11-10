@@ -79,6 +79,7 @@ pub struct TuiResult {
     pub exit_code: TuiOptionalI32,
     pub open: TuiOpenResult,
     pub state: TuiState,
+    pub progress_bar: TuiProgressBar,
     pub cursor: TuiCursor,
     pub size: TuiSize,
     pub viewport: TuiViewport,
@@ -130,7 +131,14 @@ pub struct TuiBellEvent {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+pub struct TuiProgressBar {
+    pub state: TuiString,
+    pub progress: TuiOptionalU64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub struct TuiState {
+    pub progress_bar: TuiProgressBar,
     pub session_shell: TuiString,
     pub cols: u16,
     pub rows: u16,
@@ -314,6 +322,12 @@ pub struct TuiWaitOptions {
     pub timeout_ms: TuiOptionalU64,
     pub regex: bool,
     pub not_: bool,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TuiProgressBarMatch {
+    pub state: TuiString,
+    pub progress: TuiOptionalU64,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]

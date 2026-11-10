@@ -10,6 +10,27 @@ import (
 
 type nativeRuntime struct{ session *native.Session }
 
+func (runtime *nativeRuntime) getProgressBar() (ProgressBar, error) {
+	value, err := runtime.session.GetProgressBar()
+	return engineProgressBar(value), engineError(err)
+}
+
+func engineProgressBar(value native.ProgressBar) ProgressBar {
+	return ProgressBar{State: ProgressState(value.State), Progress: value.Progress}
+}
+
+func nativeProgressBarMatch(value ProgressBarMatch) native.ProgressBarMatch {
+	return native.ProgressBarMatch{State: (*native.ProgressState)(value.State), Progress: value.Progress}
+}
+
+func (runtime *nativeRuntime) waitProgressBar(expected ProgressBarMatch, timeout *time.Duration) error {
+	return engineError(runtime.session.WaitProgressBar(nativeProgressBarMatch(expected), timeout))
+}
+
+func (runtime *nativeRuntime) expectProgressBar(expected ProgressBarMatch, timeout *time.Duration) error {
+	return engineError(runtime.session.ExpectProgressBar(nativeProgressBarMatch(expected), timeout))
+}
+
 func newNativeRuntime(name string, options ClientOptions) (*nativeRuntime, error) {
 	var nativeRecording *native.AutomaticRecording
 	if options.Recording != nil {
@@ -361,7 +382,7 @@ func engineContext(context *ExecutionContext) *native.ExecutionContext {
 	return result
 }
 func engineState(state native.State) State {
-	return State{SessionShell: state.SessionShell, Cols: state.Cols, Rows: state.Rows, Cursor: Cursor(state.Cursor), Title: state.Title, Cwd: state.Cwd, LastCommand: state.LastCommand, LastExit: state.LastExit, ExitSignal: state.ExitSignal, Exited: state.Exited, Ready: state.Ready, BellCount: state.BellCount, Modes: state.Modes, MouseMode: state.MouseMode, Colors: TerminalColors(state.Colors), Timeouts: EffectiveTimeouts(state.Timeouts), Text: state.Text}
+	return State{SessionShell: state.SessionShell, Cols: state.Cols, Rows: state.Rows, Cursor: Cursor(state.Cursor), Title: state.Title, Cwd: state.Cwd, LastCommand: state.LastCommand, LastExit: state.LastExit, ExitSignal: state.ExitSignal, Exited: state.Exited, Ready: state.Ready, BellCount: state.BellCount, ProgressBar: engineProgressBar(state.ProgressBar), Modes: state.Modes, MouseMode: state.MouseMode, Colors: TerminalColors(state.Colors), Timeouts: EffectiveTimeouts(state.Timeouts), Text: state.Text}
 }
 func engineCells(cells []native.Cell) []Cell {
 	if cells == nil {

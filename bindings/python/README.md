@@ -518,6 +518,25 @@ terminal = TuiTest(
 
 `__version__` contains the package version.
 
+### Progress bars
+
+`get_progress_bar()` returns a `ProgressBar` from OSC 9;4 reports.
+Its `state` is `"inactive"`, `"normal"`, `"error"`, `"indeterminate"`, or `"paused"`.
+Its `progress` is a percentage from 0 to 100, or `None` when unavailable.
+`state()` also includes `progress_bar`.
+
+```python
+from tui_test import ProgressBarMatch
+
+await terminal.wait_progress_bar(ProgressBarMatch(state="normal"), timeout=5000)
+await terminal.expect_progress_bar(ProgressBarMatch(progress=50))
+print(await terminal.get_progress_bar())
+```
+
+Only supplied fields participate in a match. An empty match succeeds immediately.
+These methods use the text timeout by default.
+See `examples/progress_bar.py` for a complete example.
+
 ### Errors
 
 | Error | Exit code |

@@ -107,6 +107,8 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `get_command()`, `get_output()`, `get_exit_code()` | Read command state. |
 | `get_cwd()`, `get_cursor()`, `get_size()`, `get_title()` | Read terminal fields. |
 | `get_clipboard()` | Read the session clipboard. |
+| `get_progress_bar()` | Read the OSC 9;4 progress state and percentage. |
+| `wait_progress_bar(expected)`, `expect_progress_bar(expected)` | Compare supplied `ProgressBarMatch` fields; `timeout=` overrides the text timeout. |
 | `get_bell_count()`, `get_bell_events()` | Read bells. |
 | `wait_command()`, `wait_exit()`, `wait_ready()`, `wait_idle()` | Wait for state. |
 | `wait_title()`, `wait_clipboard()`, `wait_bell()` | Wait for events. |

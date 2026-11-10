@@ -39,7 +39,13 @@ export interface BellEvent {
   elapsed_ms: number
 }
 
+export interface ProgressBar {
+  state: ProgressState
+  progress: number | null
+}
+
 export interface State {
+  progress_bar: ProgressBar
   session_shell: string | null
   cols: number
   rows: number
@@ -283,6 +289,11 @@ export interface TitleOptions {
   not?: boolean
 }
 
+export interface ProgressBarMatch {
+  state?: ProgressState
+  progress?: number
+}
+
 export interface ClipboardWaitOptions {
   regex?: boolean
   timeoutMs?: number
@@ -351,6 +362,14 @@ export declare const enum Backend {
   Ghostty = "ghostty",
   Rio = "rio",
   Xtermjs = "xtermjs",
+}
+
+export declare const enum ProgressState {
+  Inactive = "inactive",
+  Normal = "normal",
+  Error = "error",
+  Indeterminate = "indeterminate",
+  Paused = "paused",
 }
 
 export declare const enum Shell {
@@ -426,6 +445,7 @@ export declare class NativeSession {
   getExitCode(): Promise<number | null>
   getCwd(): Promise<string | null>
   getTitle(): Promise<string | null>
+  getProgressBar(): Promise<ProgressBar>
   getClipboard(): Promise<string>
   getCursor(): Promise<Cursor>
   getModes(): Promise<Record<string, boolean>>
@@ -454,6 +474,8 @@ export declare class NativeSession {
   signal(name: string): Promise<void>
   waitTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
   expectTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
+  waitProgressBar(expected: ProgressBarMatch, timeoutMs?: number | undefined | null): Promise<void>
+  expectProgressBar(expected: ProgressBarMatch, timeoutMs?: number | undefined | null): Promise<void>
   waitClipboard(text?: string | undefined | null, options?: ClipboardWaitOptions | undefined | null): Promise<void>
   waitIdle(timeoutMs?: number | undefined | null): Promise<void>
   waitCommand(timeoutMs?: number | undefined | null): Promise<void>

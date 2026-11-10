@@ -497,6 +497,23 @@ const terminal = new TuiTest("test", {
 
 `VERSION` contains the package version.
 
+### Progress bars
+
+`getProgressBar()` returns `{ state, progress }` from OSC 9;4 reports.
+`state` is `"inactive"`, `"normal"`, `"error"`, `"indeterminate"`, or `"paused"`.
+`progress` is a percentage from 0 to 100, or `null` when unavailable.
+`state()` also includes `progress_bar`.
+
+```js
+await terminal.waitProgressBar({ state: "normal" }, { timeout: 5000 });
+await terminal.expectProgressBar({ progress: 50 });
+console.log(await terminal.getProgressBar());
+```
+
+Only supplied fields participate in a match. An empty match succeeds immediately.
+These methods use the text timeout by default.
+Run `node examples/progress-bar.mjs` for a complete example.
+
 ### Errors
 
 | Error | `exitCode` |

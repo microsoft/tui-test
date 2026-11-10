@@ -302,6 +302,17 @@ type BellEvent struct {
 	Sequence uint64
 	Elapsed  time.Duration
 }
+type ProgressState string
+
+type ProgressBar struct {
+	State    ProgressState
+	Progress *uint8
+}
+
+type ProgressBarMatch struct {
+	State    *ProgressState
+	Progress *uint8
+}
 
 type TextPosition struct{ Row, Column uint32 }
 
@@ -330,6 +341,7 @@ type State struct {
 	Exited                  *int32
 	Ready                   bool
 	BellCount               uint64
+	ProgressBar             ProgressBar
 	Modes                   map[string]bool
 	MouseMode               string
 	Colors                  TerminalColors

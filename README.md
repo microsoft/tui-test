@@ -170,6 +170,36 @@ func main() {
 
 [Go installation and API reference](bindings/go/README.md)
 
+## Application progress
+
+All four backends expose application progress from [OSC 9;4](https://ghostty.org/docs/vt/osc/conemu).
+The report does not draw a widget or change terminal text.
+
+```sh
+tui-test get progress-bar
+tui-test wait progress-bar --state normal --progress 50
+tui-test expect progress-bar --state inactive
+```
+
+In Rust, use `Operation::GetProgressBar`, `Operation::WaitProgressBar`, or
+`Operation::ExpectProgressBar` with a `ProgressBarMatch`.
+Only supplied fields participate in a match.
+Waits accept an already-matched state and use the text timeout by default.
+Session state and failure diagnostics include `progress_bar`.
+
+The initial state is `inactive` with progress `0`.
+Error and paused reports retain the previous percentage if they omit it.
+Indeterminate reports retain the percentage but do not indicate definite progress.
+A full reset clears progress; a soft reset or screen switch does not.
+There is no expiration timer. Reports remain until another report or full reset.
+Malformed reports leave the previous state unchanged.
+
+Run the portable example against every enabled backend:
+
+```sh
+cargo run -p tui-test-rs --example progress_bar --all-features
+```
+
 ## API references
 
 | Surface | Reference |

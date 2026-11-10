@@ -145,7 +145,56 @@ fn viewport_result_preserves_native_count_width() {
         assert_eq!((*result).viewport.history, usize::MAX);
         tui_result_free(result);
     }
-    assert_eq!(tui_abi_version(), 7);
+    assert_eq!(tui_abi_version(), 9);
+}
+
+#[test]
+fn progress_bar_output_preserves_zero_and_absence() {
+    for progress in [Some(0), Some(100), None] {
+        let result = output::operation(OperationResult::ProgressBar(ProgressBar {
+            state: ProgressState::Paused,
+            progress,
+        }));
+        unsafe {
+            assert_eq!((*result).progress_bar.state.required().unwrap(), "paused");
+            assert_eq!(
+                (*result).progress_bar.progress.option(),
+                progress.map(u64::from)
+            );
+            tui_result_free(result);
+        }
+    }
+}
+
+#[test]
+fn progress_bar_inputs_preserve_partial_matches_and_validate_state() {
+    unsafe {
+        let absent = progress_bar_match(TuiProgressBarMatch::default()).unwrap();
+        assert_eq!(absent, ProgressBarMatch::default());
+        let explicit = progress_bar_match(TuiProgressBarMatch {
+            state: text("normal"),
+            progress: TuiOptionalU64 {
+                present: true,
+                value: 0,
+            },
+        })
+        .unwrap();
+        assert_eq!(explicit.state, Some(ProgressState::Normal));
+        assert_eq!(explicit.progress, Some(0));
+        assert!(progress_bar_match(TuiProgressBarMatch {
+            state: text("unknown"),
+            ..Default::default()
+        })
+        .is_err());
+        assert!(progress_bar_match(TuiProgressBarMatch {
+            progress: TuiOptionalU64 {
+                present: true,
+                value: 256
+            },
+            ..Default::default()
+        })
+        .is_err());
+    }
 }
 
 fn text(value: &str) -> TuiString {
