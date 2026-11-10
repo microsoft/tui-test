@@ -45,7 +45,7 @@ You can also download a binary from [GitHub Releases](https://github.com/microso
 
 | Language | Install | Reference |
 | --- | --- | --- |
-| Rust 1.90+ | `cargo add tui-test-rs@0.1.1` | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
+| Rust 1.96+ | `cargo add tui-test-rs@0.1.1` | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
 | Python 3.8+ | `pip install tui-test` | [Python API](bindings/python/README.md) |
 | Node 20+ | `npm install @microsoft/tui-test` | [JavaScript API](bindings/js/README.md) |
 | Go 1.26+ | `go get github.com/microsoft/tui-test/bindings/go@v0.1.1` | [Go API](bindings/go/README.md) |

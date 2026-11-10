@@ -10,7 +10,7 @@ use rio_vt::config::colors::{AnsiColor, ColorRgb, NamedColor as RioNamedColor};
 use rio_vt::crosswords::grid::ExtrasTable;
 use rio_vt::crosswords::pos::Line;
 use rio_vt::crosswords::square::{ContentTag, Hyperlink as RioHyperlink, Square, Wide};
-use rio_vt::crosswords::style::{Style, StyleFlags, StyleSet};
+use rio_vt::crosswords::style::{Style, StyleFlags};
 use rio_vt::crosswords::{Crosswords, CrosswordsSize, Mode};
 use rio_vt::event::{EventListener, RioEvent, WindowId};
 use rio_vt::performer::handler::Processor;
@@ -121,12 +121,12 @@ fn styled_cell(
 
 fn cell_from_rio(
     square: Square,
-    styles: &StyleSet,
+    style: Style,
     extras: &ExtrasTable,
     links: &mut LinkCache,
 ) -> EmuCell {
     match square.content_tag() {
-        ContentTag::Codepoint => styled_cell(square, styles.get(square.style_id()), extras, links),
+        ContentTag::Codepoint => styled_cell(square, style, extras, links),
         ContentTag::BgPalette => EmuCell {
             bg: Some(Color::from_index(square.bg_palette_index())),
             ..EmuCell::blank()
@@ -199,10 +199,6 @@ struct CaptureProxy {
 }
 
 impl EventListener for CaptureProxy {
-    fn event(&self) -> (Option<RioEvent>, bool) {
-        (None, false)
-    }
-
     fn send_event(&self, event: RioEvent, _id: WindowId) {
         match event {
             RioEvent::PtyWrite(_, text) => self.push(text.into_bytes()),
@@ -233,7 +229,7 @@ impl EventListener for CaptureProxy {
                     .to_string();
                 self.push(format(&text).into_bytes());
             }
-            RioEvent::Bell => self.bells.ring(),
+            RioEvent::Bell(_) => self.bells.ring(),
             _ => {}
         }
     }
@@ -301,7 +297,6 @@ impl RioEmu {
     }
 
     fn rows_in_range(&self, start: i32, end: i32) -> Vec<Vec<EmuCell>> {
-        let styles = &self.term.grid.style_set;
         let extras = &self.term.grid.extras_table;
         let mut output = Vec::with_capacity((end - start).max(0) as usize);
         let mut links = LinkCache::default();
@@ -310,7 +305,8 @@ impl RioEmu {
             let mut row = Vec::with_capacity(self.cols as usize);
             for col in 0..self.cols as usize {
                 let square = source.inner.get(col).copied().unwrap_or_default();
-                row.push(cell_from_rio(square, styles, extras, &mut links));
+                let style = self.term.grid.style_of(&square);
+                row.push(cell_from_rio(square, style, extras, &mut links));
             }
             output.push(row);
         }

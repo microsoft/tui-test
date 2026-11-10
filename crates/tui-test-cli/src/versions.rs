@@ -11,6 +11,7 @@ pub fn render(json_output: bool) -> Result<String> {
         serde_json::from_str(include_str!("../../tui-test/assets/xtermjs/pinned.json"))
             .context("parse vendored xterm.js versions")?;
     let ghostty = ghostty_vt::build_info::version_string().context("read Ghostty build version")?;
+    let ghostty = std::str::from_utf8(ghostty).context("decode Ghostty build version")?;
     let mut report = json!({
         "tui_test": env!("CARGO_PKG_VERSION"),
         "terminal_emulators": {
@@ -85,6 +86,18 @@ fn conpty_mapping(portable_pty_version: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ghostty_version_is_text_in_json_and_plain_output() {
+        let report: Value = serde_json::from_str(&render(true).unwrap()).unwrap();
+        let version = report["terminal_emulators"]["ghostty"]["version"]
+            .as_str()
+            .unwrap();
+        assert!(!version.is_empty());
+        assert!(render(false)
+            .unwrap()
+            .contains(&format!("ghostty: {version} (")));
+    }
 
     #[test]
     fn resolved_portable_pty_version_has_a_conpty_mapping() {
