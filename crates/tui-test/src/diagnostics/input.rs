@@ -164,6 +164,32 @@ impl InputDetails {
         Some(details)
     }
 
+    /// Capture the input details for a raw byte payload that cannot be
+    /// represented as a serialized [`Operation`]. Bytes that are valid UTF-8
+    /// are retained exactly like [`Operation::Write`]; anything else is
+    /// reported as unavailable for text retention while still recording the
+    /// request in history.
+    pub(crate) fn capture_bytes(data: &[u8]) -> Option<Self> {
+        if data.len() > MAX_INPUT_BYTES {
+            return Some(Self::unavailable());
+        }
+        let arguments = match std::str::from_utf8(data) {
+            Ok(text) => InputArguments::Write {
+                data: text.to_owned(),
+            },
+            Err(_) => InputArguments::Unavailable {
+                reason: "raw bytes are not valid UTF-8 and cannot be retained as text".to_string(),
+            },
+        };
+        let mut details = Self {
+            arguments,
+            sent_bytes: None,
+            mouse_position: None,
+        };
+        details.enforce_limit();
+        Some(details)
+    }
+
     pub(crate) fn record_sent(&mut self, bytes: &[u8], position: Option<(u16, u16)>) {
         if self.is_unavailable() {
             return;

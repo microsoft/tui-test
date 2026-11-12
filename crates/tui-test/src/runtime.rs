@@ -441,6 +441,31 @@ impl Session {
         }
     }
 
+    /// Write raw bytes to the child without UTF-8 conversion.
+    ///
+    /// The bytes are handed to the PTY exactly as given: NUL bytes, escape
+    /// bytes, and sequences that are not valid UTF-8 are all preserved, and
+    /// short or interrupted writes are retried by the shared PTY writer until
+    /// the full slice is handed over. What the child itself receives stays
+    /// subject to its own line discipline (Unix) or console translation
+    /// (ConPTY): the guarantee covers the bytes handed to the PTY, not
+    /// unconditional delivery to the child. NUL and escape bytes were already
+    /// representable through text input; sequences that are not valid UTF-8
+    /// are the new capability.
+    ///
+    /// The write travels the shared request pipeline, so viewport
+    /// serialization, execution tracking, history, failure finalization, and
+    /// the recording outcome behave exactly as for text input.
+    ///
+    /// An empty payload is a no-op that succeeds while the session is open,
+    /// even after the child has exited. A non-empty payload fails with an
+    /// internal error once the recorded exit state shows the child has
+    /// exited or the process status query has failed. With no open session
+    /// (after [`Session::close`]) every payload reports a no-session error.
+    pub fn write_bytes(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        self.engine.execute_raw_bytes(data, self.context.clone())
+    }
+
     /// Cancel pending operations, terminate the child, and release the terminal.
     pub fn close(&self) -> Result<(), TuiTestError> {
         self.execute(Operation::Close).map(|_| ())
