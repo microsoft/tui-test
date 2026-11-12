@@ -1,5 +1,6 @@
 import type {
   BellEvent as NativeBellEvent,
+  ProgressState as NativeProgressState,
   Cell as NativeCell,
   Cursor as NativeCursor,
   Viewport as NativeViewport,
@@ -61,7 +62,17 @@ export type EffectiveTimeouts = NativeEffectiveTimeouts;
 
 export type BellEvent = NativeBellEvent;
 
-export type State = NativeState;
+export type ProgressState = `${NativeProgressState}`;
+export interface ProgressBar {
+  state: ProgressState;
+  progress: number | null;
+}
+export interface ProgressBarMatch {
+  state?: ProgressState;
+  progress?: number;
+}
+
+export type State = Omit<NativeState, "progress_bar"> & { progress_bar: ProgressBar | null };
 
 export type TextMatch = NativeTextMatch;
 

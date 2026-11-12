@@ -228,6 +228,7 @@ or the [Rust example](../crates/tui-test/examples/scrollback.rs).
 | `wait title TEXT` | Wait for a title. |
 | `wait clipboard [TEXT]` | Wait for a clipboard change or match. |
 | `wait bell` | Wait for a bell. |
+| `wait progress-bar [--state STATE] [--progress N]` | Wait for an OSC 9;4 progress match. |
 | `wait text TEXT [--not]` | Wait for visible or absent text, with the existing selector and style flags. |
 | `wait query --query-file PATH [--not]` | Wait for a nested locator query or its absence. |
 
@@ -259,7 +260,22 @@ See the [ConPTY asset README](../crates/tui-test/assets/conpty/README.md) for it
 source, version, and update instructions.
 
 Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
-`size`, `title`, `clipboard`, `bells`, and `bell-events`.
+`size`, `title`, `clipboard`, `bells`, `bell-events`, and `progress-bar`.
+
+`get progress-bar` returns the current `state` and `progress` percentage.
+Only Ghostty and Rio support these operations. Other backends return usage errors.
+States are `inactive`, `normal`, `error`, `indeterminate`, and `paused`.
+Progress is a percentage from 0 to 100, or `null` when unavailable.
+Waits and assertions compare only supplied fields. Both fields are optional.
+They accept `--timeout MS` and use the text timeout by default.
+
+```sh
+tui-test run --backend ghostty python3 -u -c 'import sys; print("\033]9;4;1;50\007", end="", flush=True); sys.stdin.read()'
+tui-test wait progress-bar --state normal
+tui-test expect progress-bar --progress 50
+tui-test get progress-bar
+tui-test close
+```
 
 `packed-screen --json` returns `{"ok":true,"data":{"cols":80,"rows":24,"text":"..."}}`.
 The text preserves trailing spaces and blank rows. Newline characters separate rows.
@@ -277,6 +293,7 @@ Byte offsets are not cell offsets for Unicode text.
 | `expect output TEXT` | Assert command output. |
 | `expect exit-code CODE` | Assert the last exit code. |
 | `expect bell COUNT` | Wait until the cumulative bell count reaches `COUNT`. |
+| `expect progress-bar [--state STATE] [--progress N]` | Assert an OSC 9;4 progress match. |
 | `expect snapshot NAME [-u] [--include-style] [--include-title] [--cwd DIR]` | Assert a snapshot. |
 
 Snapshot `--cwd` selects the baseline root. The default is the client's working directory.

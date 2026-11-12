@@ -52,6 +52,106 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
 }
 
 #[test]
+fn progress_reports_use_native_backends_and_reject_unsupported_calls() {
+    use tui_test::{Backend, ProgressBarMatch, ProgressState};
+    for &backend in Backend::ALL {
+        let session = Session::new(format!(
+            "progress-{}-{}",
+            backend.as_str(),
+            std::process::id()
+        ))
+        .with_execution_context(ExecutionContext {
+            artifact: Some(FailureArtifactOptions {
+                mode: FailureArtifactMode::None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let mut options = if cfg!(windows) {
+            run_options("powershell.exe", &[
+                "-NoProfile", "-Command",
+                "[Console]::Write([char]27 + ']9;4;1;42' + [char]7 + 'READY'); [Console]::ReadLine() | Out-Null",
+            ])
+        } else {
+            run_options(
+                "sh",
+                &["-c", "printf '\\033]9;4;1;42\\007READY'; read answer"],
+            )
+        };
+        options.backend = backend;
+        session.run(options).unwrap();
+        if !matches!(backend.as_str(), "ghostty" | "rio") {
+            for operation in [
+                Operation::GetProgressBar,
+                Operation::WaitProgressBar {
+                    expected: ProgressBarMatch::default(),
+                    timeout_ms: Some(0),
+                },
+                Operation::ExpectProgressBar {
+                    expected: ProgressBarMatch::default(),
+                    timeout_ms: Some(0),
+                },
+            ] {
+                let error = session.execute(operation).unwrap_err();
+                assert_eq!(error.kind, ErrorKind::Usage);
+                assert!(error.message.contains("unsupported"));
+            }
+            let OperationResult::State(state) = session.execute(Operation::State).unwrap() else {
+                panic!("expected state")
+            };
+            assert_eq!(state.progress_bar, None);
+            session.close().unwrap();
+            continue;
+        }
+        let expected = ProgressBarMatch {
+            state: Some(ProgressState::Normal),
+            progress: Some(42),
+        };
+        session
+            .execute(Operation::WaitProgressBar {
+                expected,
+                timeout_ms: Some(5_000),
+            })
+            .unwrap();
+        session
+            .execute(Operation::ExpectProgressBar {
+                expected,
+                timeout_ms: Some(0),
+            })
+            .unwrap();
+        let OperationResult::ProgressBar(actual) =
+            session.execute(Operation::GetProgressBar).unwrap()
+        else {
+            panic!("expected progress");
+        };
+        assert!(expected.matches(&actual));
+        let error = session
+            .execute(Operation::WaitProgressBar {
+                expected: ProgressBarMatch {
+                    progress: Some(99),
+                    ..Default::default()
+                },
+                timeout_ms: Some(0),
+            })
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Assertion);
+        assert!(error.message.contains("42"));
+        assert_eq!(error.details.unwrap().operation, "wait.progress_bar");
+        let error = session
+            .execute(Operation::ExpectProgressBar {
+                expected: ProgressBarMatch {
+                    progress: Some(101),
+                    ..Default::default()
+                },
+                timeout_ms: Some(0),
+            })
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Usage);
+        session.close().unwrap();
+    }
+}
+
+#[test]
 fn trace_retention_writes_complete_bundles_only_for_selected_outcomes() {
     use tui_test::{TraceMode, TraceOptions};
     let root = std::env::temp_dir().join(format!("tui-test-trace-modes-{}", std::process::id()));

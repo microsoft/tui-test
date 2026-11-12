@@ -18,6 +18,51 @@ mod cli_config;
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 
 #[test]
+fn progress_bar_commands_match_optional_fields() {
+    let sandbox = Sandbox::new("progress-bar");
+    sandbox.ok(&[
+        "run",
+        "--backend",
+        "ghostty",
+        "--",
+        "python3",
+        "-u",
+        "-c",
+        "import sys; sys.stdout.write('\\x1b]9;4;1;50\\x07'); sys.stdout.flush(); sys.stdin.read()",
+    ]);
+    sandbox.ok(&[
+        "wait",
+        "progress-bar",
+        "--state",
+        "normal",
+        "--progress",
+        "50",
+    ]);
+    sandbox.ok(&["expect", "progress-bar", "--progress", "50"]);
+    sandbox.ok(&["wait", "progress-bar"]);
+    sandbox.ok(&["expect", "progress-bar"]);
+    let result: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "get", "progress-bar"])).unwrap();
+    assert_eq!(
+        result["data"]["value"],
+        serde_json::json!({"state": "normal", "progress": 50})
+    );
+    let failure = sandbox.run(&[
+        "--json",
+        "expect",
+        "progress-bar",
+        "--state",
+        "paused",
+        "--timeout",
+        "0",
+    ]);
+    assert_eq!(failure.status.code(), Some(1));
+    let invalid = sandbox.run(&["wait", "progress-bar", "--progress", "101"]);
+    assert_eq!(invalid.status.code(), Some(2));
+    sandbox.ok(&["close"]);
+}
+
+#[test]
 fn version_flags_short_circuit_incomplete_commands() {
     let sandbox = Sandbox::new("version-short-circuit");
     for flag in ["--version", "-V"] {

@@ -1270,6 +1270,8 @@ pub enum DaemonCmd {
 #[derive(Clone, Copy, clap::ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 pub enum GetArg {
+    /// Current OSC 9;4 progress state and percentage.
+    ProgressBar,
     /// Scrollback offset and available history, in rows.
     Viewport,
     /// Last command line.
@@ -1661,8 +1663,44 @@ pub enum HighlightCmd {
     },
 }
 
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum ProgressStateArg {
+    Inactive,
+    Normal,
+    Error,
+    Indeterminate,
+    Paused,
+}
+
+impl From<ProgressStateArg> for tui_test::api::ProgressState {
+    fn from(value: ProgressStateArg) -> Self {
+        match value {
+            ProgressStateArg::Inactive => Self::Inactive,
+            ProgressStateArg::Normal => Self::Normal,
+            ProgressStateArg::Error => Self::Error,
+            ProgressStateArg::Indeterminate => Self::Indeterminate,
+            ProgressStateArg::Paused => Self::Paused,
+        }
+    }
+}
+
+#[derive(Args)]
+pub struct ProgressBarArgs {
+    /// Expected progress state.
+    #[arg(long, value_enum)]
+    pub state: Option<ProgressStateArg>,
+    /// Expected percentage, from 0 to 100.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100))]
+    pub progress: Option<u8>,
+    /// Timeout in milliseconds.
+    #[arg(long, value_name = "MS")]
+    pub timeout: Option<u64>,
+}
+
 #[derive(Subcommand)]
 pub enum WaitCmd {
+    /// Wait for the OSC 9;4 progress bar to match the supplied fields.
+    ProgressBar(ProgressBarArgs),
     /// Wait for text to appear or disappear.
     Text {
         #[command(flatten)]
@@ -1756,6 +1794,8 @@ pub enum WaitCmd {
 
 #[derive(Subcommand)]
 pub enum ExpectCmd {
+    /// Assert the OSC 9;4 progress bar matches the supplied fields.
+    ProgressBar(ProgressBarArgs),
     /// Assert a nested locator query, with retries.
     Query {
         #[command(flatten)]

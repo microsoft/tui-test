@@ -497,6 +497,13 @@ const terminal = new TuiTest("test", {
 
 `VERSION` contains the package version.
 
+### Progress bars
+
+`getProgressBar()` returns `{ state, progress }` from OSC 9;4 reports.
+`waitProgressBar()` and `expectProgressBar()` compare supplied fields and use the text timeout.
+Only Ghostty and Rio support these methods. Other backends raise `UsageError` and expose `progress_bar: null` in snapshots.
+See [application progress](../../README.md#application-progress) for states and a runnable Rust example.
+
 ### Errors
 
 | Error | `exitCode` |

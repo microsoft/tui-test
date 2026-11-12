@@ -53,9 +53,26 @@ fn bell_event(s: &mut Storage, v: tui_test::api::BellEvent) -> TuiBellEvent {
     }
 }
 #[allow(unused_variables)]
+fn progress_bar(s: &mut Storage, v: tui_test::api::ProgressBar) -> TuiProgressBar {
+    TuiProgressBar {
+        state: s.string(v.state.as_str().to_owned()),
+        progress: TuiOptionalU64 {
+            present: v.progress.is_some(),
+            value: u64::from(v.progress.unwrap_or_default()),
+        },
+    }
+}
+#[allow(unused_variables)]
 fn state(s: &mut Storage, v: tui_test::api::State) -> TuiState {
     let modes = s.modes(v.modes);
     TuiState {
+        progress_bar: TuiOptionalProgressBar {
+            present: v.progress_bar.is_some(),
+            value: v
+                .progress_bar
+                .map(|v| progress_bar(s, v))
+                .unwrap_or_default(),
+        },
         session_shell: s.optional(v.session_shell),
         cols: v.cols,
         rows: v.rows,

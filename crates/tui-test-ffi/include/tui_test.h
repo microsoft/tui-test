@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define ABI_VERSION 7
+#define ABI_VERSION 11
 
 /**
  * A thread-owned asynchronous call. Start, poll, and free it on the same thread.
@@ -62,6 +62,16 @@ typedef struct TuiOpenResult {
   struct TuiString recording;
 } TuiOpenResult;
 
+typedef struct TuiProgressBar {
+  struct TuiString state;
+  struct TuiOptionalU64 progress;
+} TuiProgressBar;
+
+typedef struct TuiOptionalProgressBar {
+  bool present;
+  struct TuiProgressBar value;
+} TuiOptionalProgressBar;
+
 typedef struct TuiCursor {
   uint16_t x;
   uint16_t y;
@@ -79,6 +89,7 @@ typedef struct TuiTimeouts {
 } TuiTimeouts;
 
 typedef struct TuiState {
+  struct TuiOptionalProgressBar progress_bar;
   struct TuiString session_shell;
   uint16_t cols;
   uint16_t rows;
@@ -182,6 +193,7 @@ typedef struct TuiResult {
   struct TuiOptionalI32 exit_code;
   struct TuiOpenResult open;
   struct TuiState state;
+  struct TuiProgressBar progress_bar;
   struct TuiCursor cursor;
   struct TuiSize size;
   struct TuiViewport viewport;
@@ -318,6 +330,11 @@ typedef struct TuiWaitOptions {
   bool regex;
   bool not_;
 } TuiWaitOptions;
+
+typedef struct TuiProgressBarMatch {
+  struct TuiString state;
+  struct TuiOptionalU64 progress;
+} TuiProgressBarMatch;
 
 typedef struct TuiQuery {
   struct TuiString json;
@@ -720,6 +737,28 @@ struct TuiResult *tui_mouse_scroll(struct TuiString session,
 struct TuiResult *tui_wait_title(struct TuiString session,
                                  struct TuiString text,
                                  struct TuiWaitOptions options);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_get_progress_bar(struct TuiString session);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_wait_progress_bar(struct TuiString session,
+                                        struct TuiProgressBarMatch expected,
+                                        struct TuiOptionalU64 timeout_ms);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_expect_progress_bar(struct TuiString session,
+                                          struct TuiProgressBarMatch expected,
+                                          struct TuiOptionalU64 timeout_ms);
 
 /**
  * # Safety
@@ -1277,6 +1316,31 @@ struct TuiTask *tui_mouse_scroll_start(struct TuiString session,
 struct TuiTask *tui_wait_title_start(struct TuiString session,
                                      struct TuiString text,
                                      struct TuiWaitOptions options);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_progress_bar_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_wait_progress_bar_start(struct TuiString session,
+                                            struct TuiProgressBarMatch expected,
+                                            struct TuiOptionalU64 timeout_ms);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_expect_progress_bar_start(struct TuiString session,
+                                              struct TuiProgressBarMatch expected,
+                                              struct TuiOptionalU64 timeout_ms);
 
 /**
  * Start a typed call after copying all borrowed inputs.

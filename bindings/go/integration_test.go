@@ -25,6 +25,10 @@ func TestTerminalProcess(t *testing.T) {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		switch scanner.Text() {
+		case "progress":
+			fmt.Print("\x1b]9;4;1;50\x07")
+		case "indeterminate":
+			fmt.Print("\x1b]9;4;3\x07")
 		case "quit":
 			os.Exit(0)
 		case "events":
@@ -310,6 +314,9 @@ func TestInputAndState(t *testing.T) {
 	terminal := newTerminal(t, tuitest.ClientOptions{})
 	state, err := terminal.State()
 	requireNoError(t, err)
+	if state.ProgressBar != nil {
+		t.Fatalf("unsupported backend progress=%+v", state.ProgressBar)
+	}
 	if state.Cols != 80 || state.Rows != 30 {
 		t.Fatalf("default size=%dx%d", state.Cols, state.Rows)
 	}
@@ -337,6 +344,46 @@ func TestInputAndState(t *testing.T) {
 	requireNoError(t, terminal.GetByText("received:hello", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}))
 	requireNoError(t, terminal.Submit(tuitest.Ptr("quit")))
 	requireNoError(t, terminal.WaitExit(tuitest.WaitOptions{Timeout: tuitest.Ptr(10 * time.Second)}))
+}
+
+func TestProgressBar(t *testing.T) {
+	terminal := newTerminal(t, tuitest.ClientOptions{Backend: tuitest.Ghostty})
+	initial, err := terminal.GetProgressBar()
+	requireNoError(t, err)
+	if initial.State != tuitest.ProgressInactive || initial.Progress == nil || *initial.Progress != 0 {
+		t.Fatalf("initial progress=%+v", initial)
+	}
+	requireNoError(t, terminal.Submit(tuitest.Ptr("progress")))
+	expected := tuitest.ProgressBarMatch{State: tuitest.Ptr(tuitest.ProgressNormal), Progress: tuitest.Ptr(uint8(50))}
+	requireNoError(t, terminal.WaitProgressBar(expected, tuitest.WaitOptions{}))
+	actual, err := terminal.GetProgressBar()
+	requireNoError(t, err)
+	if actual.State != tuitest.ProgressNormal || actual.Progress == nil || *actual.Progress != 50 {
+		t.Fatalf("progress=%+v", actual)
+	}
+	state, err := terminal.State()
+	requireNoError(t, err)
+	if state.ProgressBar.State != actual.State || state.ProgressBar.Progress == nil || *state.ProgressBar.Progress != 50 {
+		t.Fatalf("state progress=%+v", state.ProgressBar)
+	}
+	requireNoError(t, terminal.ExpectProgressBar(tuitest.ProgressBarMatch{Progress: tuitest.Ptr(uint8(50))}, tuitest.WaitOptions{}))
+	requireNoError(t, terminal.WaitProgressBar(tuitest.ProgressBarMatch{}, tuitest.WaitOptions{}))
+	err = terminal.ExpectProgressBar(tuitest.ProgressBarMatch{State: tuitest.Ptr(tuitest.ProgressPaused)}, tuitest.WaitOptions{Timeout: tuitest.Ptr(time.Duration(0))})
+	var failure *tuitest.Error
+	if !errors.As(err, &failure) || failure.Kind != tuitest.AssertionError || failure.Details.Operation != "expect.progress_bar" {
+		t.Fatalf("expected progress assertion, got %v", err)
+	}
+	err = terminal.WaitProgressBar(tuitest.ProgressBarMatch{Progress: tuitest.Ptr(uint8(101))}, tuitest.WaitOptions{})
+	if !errors.As(err, &failure) || failure.Kind != tuitest.UsageError {
+		t.Fatalf("expected usage error, got %v", err)
+	}
+	requireNoError(t, terminal.Submit(tuitest.Ptr("indeterminate")))
+	requireNoError(t, terminal.WaitProgressBar(tuitest.ProgressBarMatch{State: tuitest.Ptr(tuitest.ProgressIndeterminate)}, tuitest.WaitOptions{}))
+	actual, err = terminal.GetProgressBar()
+	requireNoError(t, err)
+	if actual.Progress == nil || *actual.Progress != 50 {
+		t.Fatalf("indeterminate percentage=%v", actual.Progress)
+	}
 }
 
 func TestTerminalEvents(t *testing.T) {
