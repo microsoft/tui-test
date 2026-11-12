@@ -102,7 +102,7 @@ jobs:
 
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: "0.16.0"
+          version: "0.17.0"
           cache-key: ${{ matrix.target }}
 
       - if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -193,7 +193,7 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         if: "!endsWith(matrix.target, '-gnu')"
         with:
-          version: "0.16.0"
+          version: "0.17.0"
           cache-key: ${{ matrix.target }}
 
       - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
@@ -407,7 +407,7 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         if: runner.os != 'Linux'
         with:
-          version: "0.16.0"
+          version: "0.17.0"
           cache-key: ${{ matrix.target }}
 
       - name: Build Python wheel
