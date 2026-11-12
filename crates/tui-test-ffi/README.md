@@ -6,7 +6,9 @@ There is no separate Rust N-API adapter or JavaScript-specific native build.
 Koffi supplies its own native addon.
 
 The library and language package must come from the same source revision.
-This ABI is an internal contract, not a stable public C SDK.
+The [C SDK](../../bindings/c/README.md) packages this ABI for C and C++ consumers.
+Use its matching header and library; compatibility across different ABI versions
+is not guaranteed.
 The language adapters preserve their public convenience APIs.
 ABI version 4 includes the shared pointer and asynchronous entrypoints.
 ABI version 5 adds native scrollback operations and the full-width `TuiViewport` result.
