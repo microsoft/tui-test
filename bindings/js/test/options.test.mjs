@@ -291,6 +291,7 @@ test("backendPayload validates backend names", () => {
   assert.equal(backendPayload("alacritty"), "alacritty");
   assert.equal(backendPayload("ghostty"), "ghostty");
   assert.equal(backendPayload("rio"), "rio");
+  assert.equal(backendPayload(" Windows-Terminal "), "windows-terminal");
   assert.throws(() => backendPayload("xterm"), /unknown backend/);
   assert.throws(() => backendPayload("libghostty"), /unknown backend/);
 });

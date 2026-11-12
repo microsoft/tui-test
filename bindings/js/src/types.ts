@@ -15,7 +15,7 @@ import type {
 export type { RenderStyle, FontFamilies, WindowStyle, BorderStyle, ShadowStyle, RecordingCursorStyle, PaddingSides } from "../native/index.js";
 
 export type Color = "default" | number | string;
-export type Backend = "alacritty" | "ghostty" | "rio" | "xtermjs";
+export type Backend = "alacritty" | "ghostty" | "rio" | "xtermjs" | "windows-terminal";
 
 /** `"none"` is a value, not an absence: an un-underlined cell reports it. */
 export type UnderlineStyle =

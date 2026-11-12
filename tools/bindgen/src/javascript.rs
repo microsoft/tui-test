@@ -317,7 +317,7 @@ fn coverage(models: &Models) -> Result<()> {
         .collect();
     let owned_results: BTreeSet<_> = models.enums["OperationResult"]
         .iter()
-        .map(String::as_str)
+        .map(|variant| variant.name.as_str())
         .collect();
     if results != owned_results {
         bail!("OperationResult JavaScript coverage mismatch");
@@ -336,7 +336,7 @@ fn coverage(models: &Models) -> Result<()> {
         .collect();
     let owned: BTreeSet<_> = models.enums["Operation"]
         .iter()
-        .map(String::as_str)
+        .map(|variant| variant.name.as_str())
         .collect();
     if declared != owned {
         bail!("Operation JavaScript coverage mismatch");
@@ -350,7 +350,10 @@ fn coverage(models: &Models) -> Result<()> {
             .iter()
             .filter_map(|(_, op, _)| op.strip_prefix(&format!("{kind}.")))
             .collect();
-        let owned: BTreeSet<_> = models.enums[model].iter().map(String::as_str).collect();
+        let owned: BTreeSet<_> = models.enums[model]
+            .iter()
+            .map(|variant| variant.name.as_str())
+            .collect();
         if declared != owned {
             bail!("{model} JavaScript coverage mismatch");
         }
@@ -429,8 +432,8 @@ pub(super) fn generate(models: &Models, root: &Path, check: bool) -> Result<()> 
         writeln!(dts, "export declare const enum {target} {{")?;
         writeln!(schema, "{target}: {{")?;
         for variant in &models.enums[name] {
-            writeln!(dts, "  {variant} = {:?},", variant.to_lowercase())?;
-            writeln!(schema, "{variant}: {:?},", variant.to_lowercase())?;
+            writeln!(dts, "  {} = {:?},", variant.name, variant.wire_name)?;
+            writeln!(schema, "{}: {:?},", variant.name, variant.wire_name)?;
         }
         dts.push_str("}\n\n");
         schema.push_str("},\n");
@@ -511,7 +514,10 @@ mod tests {
             "ScrollTarget",
         ] {
             let mut models = Models::load(root).unwrap();
-            models.enums.get_mut(name).unwrap().push("Future".into());
+            models.enums.get_mut(name).unwrap().push(EnumVariant {
+                name: "Future".into(),
+                wire_name: "future".into(),
+            });
             assert!(coverage(&models).is_err());
         }
     }

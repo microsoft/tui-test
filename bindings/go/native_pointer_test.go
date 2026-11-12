@@ -5,6 +5,15 @@ import (
 	"testing"
 )
 
+func TestWindowsTerminalBackendValidation(t *testing.T) {
+	if err := validateClientOptions(ClientOptions{Backend: Backend("windows-terminal")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateClientOptions(ClientOptions{Backend: Backend("windowsterminal")}); err == nil {
+		t.Fatal("expected an invalid backend spelling to be rejected")
+	}
+}
+
 func TestNativeOptionPointersPreserveValidation(t *testing.T) {
 	terminal, err := Ephemeral(t.Name(), ClientOptions{Recording: &AutomaticRecording{Mode: RecordingDisabled}})
 	if err != nil {
