@@ -404,11 +404,15 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             wait_ready,
             no_wait_ready,
             restart,
+            recording_mode,
             profile,
             timeouts,
             diagnostics,
         }) => {
-            let settings = resolve_client_settings(&profile)?;
+            let mut settings = resolve_client_settings(&profile)?;
+            if let Some(mode) = recording_mode {
+                settings.recording.mode = mode.into();
+            }
             Request::Open {
                 shell: shell.map(Into::into),
                 program: None,
@@ -442,13 +446,17 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             wait_ready,
             no_wait_ready,
             restart,
+            recording_mode,
             profile,
             timeouts,
             diagnostics,
         }) => {
             let mut prog = vec![program];
             prog.extend(args);
-            let settings = resolve_client_settings(&profile)?;
+            let mut settings = resolve_client_settings(&profile)?;
+            if let Some(mode) = recording_mode {
+                settings.recording.mode = mode.into();
+            }
             Request::Open {
                 shell: None,
                 program: Some(prog),
@@ -1638,7 +1646,7 @@ fn usage_text() -> &'static str {
     "tui-test: headless terminal cli + daemon\n\
 \n\
 SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
-                  [--config F] [--profile P] [--restart]\n\
+                  [--config F] [--profile P] [--restart] [--recording-mode MODE]\n\
           run [--config F] [--profile P] [--restart] <program> [args...]\n\
           [global options] -- <program> [args...]  (direct run shorthand)\n\
           restart [--graceful-timeout MS]\n\
@@ -1667,7 +1675,8 @@ EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
 DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           [--background COLOR | --transparent]\n\
-          record pause|resume|stop | get-recording [session] > out.cast (when tracing is enabled)\n\
+          record pause|resume|stop | get-recording [session] > out.cast\n\
+          open/run --recording-mode disabled|on-failure|always (cast without a trace)\n\
 TRACE     trace finish passed|failed (keep the session open)\n\
 TAPE      tape check FILE | tape run FILE (trusted scripts; isolated local session)\n\
 WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
@@ -1696,6 +1705,28 @@ mod tests {
     use clap::Parser;
     use serde_json::json;
     use std::cell::RefCell;
+
+    #[test]
+    fn automatic_recording_modes_reach_the_daemon_for_open_and_run() {
+        for command in ["open", "run"] {
+            for mode in ["disabled", "on-failure", "always"] {
+                let mut args = vec!["tui-test", command, "--recording-mode", mode];
+                if command == "run" {
+                    args.push("example");
+                }
+                let cli = Cli::try_parse_from(args).unwrap();
+                let request = build_request(cli.command.unwrap()).unwrap();
+                let encoded = serde_json::to_value(&request).unwrap();
+                assert_eq!(encoded["recording"]["mode"], mode);
+                let decoded: Request = serde_json::from_value(encoded).unwrap();
+                let Request::Open { recording, .. } = decoded else {
+                    panic!("expected open request");
+                };
+                assert_eq!(serde_json::to_value(recording.mode).unwrap(), mode);
+            }
+        }
+        assert!(Cli::try_parse_from(["tui-test", "open", "--recording-mode", "on"]).is_err());
+    }
 
     #[test]
     fn query_commands_preserve_every_nested_locator_field() {

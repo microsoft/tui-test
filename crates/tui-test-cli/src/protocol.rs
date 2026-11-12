@@ -10,7 +10,30 @@ use tui_test::{
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
+
+// Config files intentionally exclude mode; the daemon transport must retain it.
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "AutomaticRecording", deny_unknown_fields)]
+struct AutomaticRecordingWire {
+    #[serde(default)]
+    mode: tui_test::AutomaticRecordingMode,
+    directory: Option<std::path::PathBuf>,
+}
+
+fn serialize_recording<S>(recording: &AutomaticRecording, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    AutomaticRecordingWire::serialize(recording, serializer)
+}
+
+fn deserialize_recording<'de, D>(deserializer: D) -> Result<Box<AutomaticRecording>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    AutomaticRecordingWire::deserialize(deserializer).map(Box::new)
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "tui_test::ScrollTarget")]
@@ -57,7 +80,11 @@ pub enum Request {
         restart: bool,
         #[serde(default)]
         timeouts: Timeouts,
-        #[serde(default)]
+        #[serde(
+            default,
+            serialize_with = "serialize_recording",
+            deserialize_with = "deserialize_recording"
+        )]
         recording: Box<AutomaticRecording>,
         #[serde(default)]
         trace: tui_test::TraceOptions,
@@ -280,9 +307,7 @@ impl Request {
             }
             let request_retention = request.diagnostic_retention();
             if context.trace.is_none() {
-                if let Request::Open { trace, .. } = request.as_ref() {
-                    context.trace = Some(trace.clone());
-                }
+                context.trace = request.spawn_trace();
             }
             if request_retention != DiagnosticRetentionOptions::default() {
                 context.retention = request_retention;
@@ -296,10 +321,7 @@ impl Request {
         }
         let operation_name = self.diagnostic_operation_name().to_string();
         let retention = self.diagnostic_retention();
-        let trace = match &self {
-            Self::Open { trace, .. } => Some(trace.clone()),
-            _ => None,
-        };
+        let trace = self.spawn_trace();
         match self.into_operation() {
             Ok(operation) => Response::from_result(engine.execute_with_context_cancellable(
                 operation,
@@ -312,6 +334,19 @@ impl Request {
                 cancelled,
             )),
             Err(error) => Response::from_error(error),
+        }
+    }
+
+    fn spawn_trace(&self) -> Option<tui_test::TraceOptions> {
+        match self {
+            Self::Open {
+                trace, recording, ..
+            } if trace.mode != tui_test::TraceMode::Off
+                || recording.mode == tui_test::AutomaticRecordingMode::Disabled =>
+            {
+                Some(trace.clone())
+            }
+            _ => None,
         }
     }
 
@@ -890,6 +925,33 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
 mod tests {
     use super::*;
     use tui_test::FailureReason;
+
+    #[test]
+    fn automatic_recording_wire_preserves_modes_and_legacy_defaults() {
+        for mode in [None, Some("disabled"), Some("on-failure"), Some("always")] {
+            for program in [None, Some(vec!["example"])] {
+                let mut value = json!({
+                    "kind": "open", "program": program, "cols": 80, "rows": 24, "env": [],
+                    "recording": { "directory": "casts" },
+                });
+                if let Some(mode) = mode {
+                    value["recording"]["mode"] = json!(mode);
+                }
+                let request: Request = serde_json::from_value(value).unwrap();
+                let operation = request.into_operation().unwrap();
+                let recording = match operation {
+                    Operation::Open(options) => options.recording,
+                    Operation::Run(options) => options.recording,
+                    _ => panic!("expected spawn operation"),
+                };
+                assert_eq!(
+                    serde_json::to_value(recording.mode).unwrap(),
+                    mode.unwrap_or("disabled")
+                );
+                assert_eq!(recording.directory, Some("casts".into()));
+            }
+        }
+    }
 
     #[test]
     fn session_parity_requests_round_trip_and_map_to_operations() {

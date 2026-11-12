@@ -58,3 +58,42 @@ func TestParitySpawnContextConversion(t *testing.T) {
 		t.Fatal("mutated caller context")
 	}
 }
+
+func TestParityRenderingDefaultsCopyNestedValues(t *testing.T) {
+	style := &RenderStyle{
+		Font:           FontFamilies{Files: []string{"original.ttf"}, BoldItalic: Ptr("monospace")},
+		CanvasPadding:  Padding{Uniform: Ptr(uint32(0))},
+		ContentPadding: Padding{Left: Ptr(uint32(0))},
+		Window:         WindowStyle{TitleBar: Ptr(false)},
+		Border:         BorderStyle{Radius: Ptr(0.0)},
+		Shadow:         ShadowStyle{Enabled: Ptr(false)},
+		Cursor:         RecordingCursorStyle{Blink: Ptr(false), BlinkIntervalMS: Ptr(uint64(250))},
+	}
+	client, err := New("rendering-defaults", ClientOptions{Style: style})
+	if err != nil {
+		t.Fatal(err)
+	}
+	style.Font.Files[0] = "changed.ttf"
+	*style.Font.BoldItalic = "serif"
+	*style.CanvasPadding.Uniform = 10
+	*style.ContentPadding.Left = 10
+	*style.Window.TitleBar = true
+	*style.Border.Radius = 8
+	*style.Shadow.Enabled = true
+	*style.Cursor.Blink = true
+	*style.Cursor.BlinkIntervalMS = 500
+	options, err := client.spawnOptions(SpawnOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual := options.Style
+	if actual.Font.Files[0] != "original.ttf" || *actual.Font.BoldItalic != "monospace" ||
+		*actual.CanvasPadding.Uniform != 0 || *actual.ContentPadding.Left != 0 ||
+		*actual.Window.TitleBar || *actual.Border.Radius != 0 || *actual.Shadow.Enabled ||
+		*actual.Cursor.Blink || *actual.Cursor.BlinkIntervalMS != 250 {
+		t.Fatal("caller mutation changed nested rendering defaults")
+	}
+	if actual.FontSize != nil || actual.Window.Background != nil || actual.ContentPadding.Top != nil {
+		t.Fatal("omitted rendering defaults became explicit")
+	}
+}

@@ -20,6 +20,13 @@ Use `--session NAME` to select a session. `open` and `run` reuse it unless `--re
 
 `open` and `run` accept `--screen-history-limit COUNT` to control how many distinct recent screens are retained for failures.
 
+Use `--recording-mode disabled|on-failure|always` with `open` or `run` to control
+automatic asciicast capture without enabling a trace. The default is `disabled`.
+`on-failure` keeps the cast only when an operation fails or `trace finish failed`
+reports a failed outcome; `always` also keeps successful sessions.
+`[recording].directory` still selects the destination. Active tracing takes
+precedence over this flag, as does an explicit trace setting in `--context-file`.
+
 `restart` replays the last successful spawn, preserving its original working directory, options, and latest terminal size. It sends Ctrl-C and waits up to 5000 ms before forcing replacement; `--graceful-timeout 0` skips the wait. It works after child exit, but not after `close` or daemon shutdown. The terminal and automatic recording start fresh.
 
 `interrupt` calls the same cancellation mechanism as Rust `Session::interrupt`.
@@ -586,7 +593,8 @@ font_size = 24
 The `docs` profile still writes to `./artifacts` and draws at 24px over the
 `#101014` canvas with 32px of padding. Inheritance is key by key at every
 depth, so naming one style key keeps the rest of the file's look. Whether a
-recording is kept is not a `[recording]` key: that follows `[trace] mode`.
+recording is kept is not a `[recording]` key: use `--recording-mode` for cast-only
+capture, or `[trace] mode` to retain casts alongside trace artifacts.
 
 This also applies when the file uses uniform padding and a profile overrides one side:
 

@@ -96,6 +96,24 @@ impl From<RecordingFormatArg> for RecordingFormat {
     }
 }
 
+#[derive(Clone, Copy, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum AutomaticRecordingModeArg {
+    Disabled,
+    OnFailure,
+    Always,
+}
+
+impl From<AutomaticRecordingModeArg> for tui_test::AutomaticRecordingMode {
+    fn from(mode: AutomaticRecordingModeArg) -> Self {
+        match mode {
+            AutomaticRecordingModeArg::Disabled => Self::Disabled,
+            AutomaticRecordingModeArg::OnFailure => Self::OnFailure,
+            AutomaticRecordingModeArg::Always => Self::Always,
+        }
+    }
+}
+
 /// Per-class default timeouts for a session, in milliseconds.
 #[derive(Args, Clone, Copy, Default)]
 pub struct TimeoutArgs {
@@ -259,6 +277,9 @@ pub struct OpenArgs {
     /// Replace a live session instead of reusing it.
     #[arg(long, visible_alias = "force")]
     pub restart: bool,
+    /// Keep an automatic asciicast without enabling a trace. Active tracing takes precedence.
+    #[arg(long, value_enum)]
+    pub recording_mode: Option<AutomaticRecordingModeArg>,
     #[command(flatten)]
     pub profile: ProfileArgs,
     #[command(flatten)]
@@ -299,6 +320,9 @@ pub struct RunArgs {
     /// Replace a live session instead of reusing it.
     #[arg(long, visible_alias = "force")]
     pub restart: bool,
+    /// Keep an automatic asciicast without enabling a trace. Active tracing takes precedence.
+    #[arg(long, value_enum)]
+    pub recording_mode: Option<AutomaticRecordingModeArg>,
     #[command(flatten)]
     pub profile: ProfileArgs,
     #[command(flatten)]
