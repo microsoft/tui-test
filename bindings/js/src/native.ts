@@ -36,13 +36,20 @@ import type {
 
 type NativeBinding = typeof import("../native/index.js");
 type NativeSessionHandle = InstanceType<NativeBinding["NativeSession"]>;
-type RuntimeOpenOptions = Omit<OpenOptions, "shell" | "backend"> & {
+type RuntimeAutomaticRecordingOptions = Omit<AutomaticRecordingOptions, "format"> & {
+  format?: "cast" | "cast3";
+};
+type RuntimeOpenOptions = Omit<OpenOptions, "shell" | "backend" | "recording"> & {
   shell?: string;
   backend?: string;
+  recording?: RuntimeAutomaticRecordingOptions;
 };
-type RuntimeRunOptions = Omit<RunOptions, "backend"> & { backend?: string };
+type RuntimeRunOptions = Omit<RunOptions, "backend" | "recording"> & {
+  backend?: string;
+  recording?: RuntimeAutomaticRecordingOptions;
+};
 type RuntimeRecordingOptions = Omit<RecordingOptions, "format"> & {
-  format?: "apng" | "gif" | "mp4" | "cast";
+  format?: "apng" | "gif" | "mp4" | "cast" | "cast3";
 };
 export type RuntimeLocatorNode = Omit<LocatorNode, "kind" | "direction"> & {
   kind: "text" | "style" | "link" | "and" | "or" | "filter";
@@ -209,13 +216,13 @@ async function invoke<T>(action: () => Promise<T>): Promise<T> {
 
 async function createSession(
   name: string,
-  recording?: AutomaticRecordingOptions,
+  recording?: RuntimeAutomaticRecordingOptions,
   artifacts?: FailureArtifactOptions,
   trace?: TraceOptions,
   context?: SessionContext,
 ): Promise<NativeSessionHandle> {
   const binding = await loadBinding();
-  return new binding.NativeSession(name, recording, artifacts, trace, context);
+  return new binding.NativeSession(name, recording as AutomaticRecordingOptions | undefined, artifacts, trace, context);
 }
 
 export class NativeRuntime {
@@ -223,7 +230,7 @@ export class NativeRuntime {
 
   constructor(
     name: string,
-    recording?: AutomaticRecordingOptions,
+    recording?: RuntimeAutomaticRecordingOptions,
     artifacts?: FailureArtifactOptions,
     trace?: TraceOptions,
     context?: SessionContext,

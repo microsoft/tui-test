@@ -172,6 +172,7 @@ unsafe fn open_input(
         recording: AutomaticRecording {
             mode,
             directory: unsafe { value.recording_directory.optional()? }.map(Into::into),
+            format: unsafe { recording_format(value.recording_format)? },
         },
         style: unsafe { style_style(value.style)? },
     })

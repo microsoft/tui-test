@@ -311,6 +311,7 @@ export function createAdapter(functions) {
     #context;
     #directory;
     #recordingMode;
+    #recordingFormat;
     constructor(name, recording, artifacts, trace, context) {
       this.#name = validate("String", name, "name");
       recording = validate("Option<AutomaticRecordingOptions>", recording, "");
@@ -318,6 +319,7 @@ export function createAdapter(functions) {
       trace = validate("Option<TraceOptions>", trace, "");
       this.#directory = recording?.directory;
       this.#recordingMode = recording?.mode;
+      this.#recordingFormat = recording?.format;
       this.#context = { name };
       if (artifacts) Object.assign(this.#context, {
         artifact_directory: artifacts.directory,
@@ -338,6 +340,7 @@ export function createAdapter(functions) {
         scrollback: options.profile_scrollback,
         recording_directory: options.recording === undefined ? this.#directory : options.recording.directory,
         recording_mode: options.recording === undefined ? this.#recordingMode : options.recording.mode,
+        recording_format: options.recording === undefined ? this.#recordingFormat : options.recording.format,
       });
       const args = [context, native];
       if (method === "run") args.push(input.string(options.program), input.array("TuiString", options.args), options.args?.length ?? 0);

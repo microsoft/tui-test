@@ -175,6 +175,7 @@ export interface Timeouts {
 export interface AutomaticRecordingOptions {
   mode?: string
   directory?: string
+  format?: RecordingFormat
 }
 
 export interface TraceOptions {
@@ -370,6 +371,7 @@ export declare const enum RecordingFormat {
   Gif = "gif",
   Mp4 = "mp4",
   Cast = "cast",
+  Cast3 = "cast3",
 }
 
 export declare const enum SnapshotResult {

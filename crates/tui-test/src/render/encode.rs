@@ -34,7 +34,9 @@ pub(crate) fn encode(
                 .ok_or_else(|| anyhow::anyhow!("MP4 recording is missing its ffmpeg executable"))?;
             encode_mp4(path, frames, renderer, fps, ffmpeg_path)
         }
-        RecordingFormat::Cast => anyhow::bail!("cast recordings do not require animation encoding"),
+        RecordingFormat::Cast | RecordingFormat::Cast3 => {
+            anyhow::bail!("cast recordings do not require animation encoding")
+        }
     }
 }
 
@@ -686,7 +688,7 @@ mod tests {
                 RecordingFormat::Apng => "png",
                 RecordingFormat::Gif => "gif",
                 RecordingFormat::Mp4 => unreachable!(),
-                RecordingFormat::Cast => unreachable!(),
+                RecordingFormat::Cast | RecordingFormat::Cast3 => unreachable!(),
             });
             let frames = sample_frames();
             let scale = 2;
@@ -724,7 +726,7 @@ mod tests {
                     }
                 }
                 RecordingFormat::Mp4 => unreachable!(),
-                RecordingFormat::Cast => unreachable!(),
+                RecordingFormat::Cast | RecordingFormat::Cast3 => unreachable!(),
             }
             std::fs::remove_file(path).unwrap();
         }

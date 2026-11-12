@@ -81,7 +81,10 @@ Open adds the shell; run adds the program and arguments.
 Per-call recording directories override constructor defaults.
 Runtime APIs also expose `AutomaticRecording.mode` for casts without traces.
 Its values are disabled, on-failure, and always. Explicit trace options take precedence.
-Serde omits this runtime field, so the CLI configuration still accepts only the recording directory.
+Serde omits this runtime field. CLI configuration uses trace settings to enable automatic capture.
+`AutomaticRecording.format` selects `RecordingFormat::Cast` (v2) or `RecordingFormat::Cast3` (v3).
+Omitting the format preserves v2. Setting it does not enable recording.
+The CLI configuration exposes the same choice as `[recording] format = "cast"` or `"cast3"`.
 `ExecutionContext` retains the operation name, artifact options, diagnostic map, retention limit, and trace options.
 Bindings accept this context on the constructor and on each spawn.
 Per-spawn context overrides do not mutate constructor defaults.
@@ -130,6 +133,11 @@ There is no default idle cap or extra final hold.
 Set `idle_time_limit` to cap unchanged visual intervals before `speed` scales their durations.
 Cursor blink phases share the source screen's idle limit.
 Asciicast remains a timestamped output stream, independent of raster sampling.
+
+Explicit recordings accept `RecordingFormat::Cast` or `RecordingFormat::Cast3`.
+Both use `.cast` files; extension inference still selects v2.
+Run `cargo run -p tui-test-rs --example asciicast_versions` to create both formats.
+The example checks explicit and automatic output and prints each file's version.
 
 Run the [time-based recording example](../crates/tui-test/examples/time_based_recording.rs) from a source checkout:
 

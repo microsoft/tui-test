@@ -376,6 +376,10 @@ Timeout defaults:
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `--format` overrides it.
 
+Use `--format cast` for asciicast v2 or `--format cast3` for asciicast v3.
+Both use `.cast` files; the extension alone still selects v2.
+Recording remains disabled by default.
+
 #### Record
 
 <p align="center">

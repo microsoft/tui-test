@@ -66,10 +66,11 @@ const (
 type RecordingFormat string
 
 const (
-	APNG RecordingFormat = "apng"
-	GIF  RecordingFormat = "gif"
-	MP4  RecordingFormat = "mp4"
-	Cast RecordingFormat = "cast"
+	APNG  RecordingFormat = "apng"
+	GIF   RecordingFormat = "gif"
+	MP4   RecordingFormat = "mp4"
+	Cast  RecordingFormat = "cast"
+	Cast3 RecordingFormat = "cast3"
 )
 
 type MouseButton string
@@ -122,6 +123,7 @@ type Profile struct {
 	Colors     Colors
 }
 type AutomaticRecording struct {
+	Format    RecordingFormat
 	Mode      RecordingMode
 	Directory string
 }

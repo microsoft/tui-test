@@ -8,7 +8,7 @@ Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
 MouseButton = Literal["left", "middle", "right"]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
-RecordingFormat = Literal["apng", "gif", "mp4", "cast"]
+RecordingFormat = Literal["apng", "gif", "mp4", "cast", "cast3"]
 TraceMode = Literal["off", "on-failure", "on"]
 LocatorDirection = Literal["within", "after", "before"]
 
@@ -158,6 +158,7 @@ class Timeouts:
 class AutomaticRecording:
     directory: Optional[str] = None
     mode: Optional[Literal["disabled", "on-failure", "always"]] = None
+    format: Optional[Literal["cast", "cast3"]] = None
 
 @dataclass
 class TraceOptions:

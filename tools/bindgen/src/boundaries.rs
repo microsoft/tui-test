@@ -614,7 +614,7 @@ fn input_conversions(models: &Models, ci: &mut String) -> Result<()> {
             "rows" => "u16_option(value.rows, \"rows\")?.unwrap_or(30)".into(),
             "env" => "unsafe { pairs(value.env, value.env_len)? }".into(),
             "timeouts" => "timeouts(value.timeouts)".into(),
-            "recording" => "AutomaticRecording { mode, directory: unsafe { value.recording_directory.optional()? }.map(Into::into) }".into(),
+            "recording" => "AutomaticRecording { mode, directory: unsafe { value.recording_directory.optional()? }.map(Into::into), format: unsafe { recording_format(value.recording_format)? } }".into(),
             _ if f.ty == "Option<String>" => format!("unsafe {{ value.{name}.optional()? }}"),
             _ if option(&f.ty).is_some() => format!("value.{name}.option()"),
             _ => format!("value.{name}"),

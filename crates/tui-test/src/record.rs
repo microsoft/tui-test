@@ -91,9 +91,19 @@ impl Recorder {
         required: bool,
         logger: Arc<crate::logger::Logger>,
     ) -> std::io::Result<Self> {
-        Self::create_at(path, cols, rows, env, required, logger, Instant::now())
+        Self::create_at(
+            path,
+            cols,
+            rows,
+            env,
+            required,
+            logger,
+            Instant::now(),
+            RecordingFormat::Cast,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_at(
         path: Option<PathBuf>,
         cols: u16,
@@ -102,9 +112,10 @@ impl Recorder {
         required: bool,
         logger: Arc<crate::logger::Logger>,
         started: Instant,
+        format: RecordingFormat,
     ) -> std::io::Result<Self> {
         let writer = match path {
-            Some(path) => match cast::CastWriter::create(&path, cols, rows, env, started) {
+            Some(path) => match cast::CastWriter::create(&path, cols, rows, env, started, format) {
                 Ok(writer) => Some(writer),
                 Err(error) if required => return Err(error),
                 Err(error) => {
@@ -730,6 +741,7 @@ mod tests {
                 false,
                 Arc::new(crate::logger::Logger::disabled()),
                 started,
+                RecordingFormat::Cast,
             )
             .unwrap();
             assert!(matches!(recorder.pause(), Err(CaptureError::NotActive)));

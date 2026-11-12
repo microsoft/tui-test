@@ -618,6 +618,29 @@ func TestRenderingSettingsAndNativeAssertions(t *testing.T) {
 	}
 }
 
+func TestAsciicastV3Recording(t *testing.T) {
+	directory := t.TempDir()
+	terminal := newTerminal(t, tuitest.ClientOptions{Recording: &tuitest.AutomaticRecording{
+		Mode: tuitest.RecordingAlways, Directory: directory, Format: tuitest.Cast3,
+	}})
+	automatic, err := tuitest.Recording(terminal.Session())
+	requireNoError(t, err)
+	if !strings.Contains(automatic, `"version":3`) {
+		t.Fatal("automatic recording is not v3")
+	}
+	path := filepath.Join(directory, "explicit.cast")
+	requireNoError(t, terminal.StartRecording(path, tuitest.RecordingOptions{Format: tuitest.Cast3}))
+	requireNoError(t, terminal.Submit(tuitest.Ptr("recorded-v3")))
+	requireNoError(t, terminal.GetByText("received:recorded-v3", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}))
+	_, err = terminal.StopRecording()
+	requireNoError(t, err)
+	cast, err := os.ReadFile(path)
+	requireNoError(t, err)
+	if !strings.Contains(string(cast), `"version":3`) || !strings.Contains(string(cast), "recorded-v3") {
+		t.Fatalf("invalid v3 recording: %s", cast)
+	}
+}
+
 func TestRecordingAndCloseAll(t *testing.T) {
 	directory := t.TempDir()
 	terminal := newTerminal(t, tuitest.ClientOptions{Recording: &tuitest.AutomaticRecording{Mode: tuitest.RecordingAlways, Directory: directory}})

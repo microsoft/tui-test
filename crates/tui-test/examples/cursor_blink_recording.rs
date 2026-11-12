@@ -52,6 +52,7 @@ fn main() -> anyhow::Result<()> {
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::Disabled,
                 directory: None,
+                format: None,
             },
         })?;
 
