@@ -10,6 +10,50 @@ import (
 
 type nativeRuntime struct{ session *native.Session }
 
+func engineProgramStatus(value native.ProgramStatus) ProgramStatus {
+	return ProgramStatus{ID: value.ID, State: ProgramState(value.State), App: value.App,
+		Title: value.Title, Message: value.Message, Kind: (*ProgramStatusKind)(value.Kind), Progress: value.Progress}
+}
+
+func engineProgramStatuses(values []native.ProgramStatus) []ProgramStatus {
+	if values == nil {
+		return nil
+	}
+	result := make([]ProgramStatus, len(values))
+	for index, value := range values {
+		result[index] = engineProgramStatus(value)
+	}
+	return result
+}
+
+func nativeProgramStatusMatch(value ProgramStatusMatch) native.ProgramStatusMatch {
+	return native.ProgramStatusMatch{ID: value.ID, State: (*native.ProgramState)(value.State),
+		App: value.App, Title: value.Title, Message: value.Message,
+		Kind: (*native.ProgramStatusKind)(value.Kind), Progress: value.Progress}
+}
+
+func (runtime *nativeRuntime) getProgramStatuses() ([]ProgramStatus, error) {
+	values, err := runtime.session.GetProgramStatuses()
+	return engineProgramStatuses(values), engineError(err)
+}
+
+func (runtime *nativeRuntime) getProgramStatus(id string) (*ProgramStatus, error) {
+	value, err := runtime.session.GetProgramStatus(id)
+	if value == nil {
+		return nil, engineError(err)
+	}
+	result := engineProgramStatus(*value)
+	return &result, engineError(err)
+}
+
+func (runtime *nativeRuntime) waitProgramStatus(expected ProgramStatusMatch, timeout *time.Duration) error {
+	return engineError(runtime.session.WaitProgramStatus(nativeProgramStatusMatch(expected), timeout))
+}
+
+func (runtime *nativeRuntime) expectProgramStatus(expected ProgramStatusMatch, timeout *time.Duration) error {
+	return engineError(runtime.session.ExpectProgramStatus(nativeProgramStatusMatch(expected), timeout))
+}
+
 func (runtime *nativeRuntime) getProgressBar() (ProgressBar, error) {
 	value, err := runtime.session.GetProgressBar()
 	return engineProgressBar(value), engineError(err)
@@ -386,7 +430,7 @@ func engineState(state native.State) State {
 	if state.ProgressBar != nil {
 		progress = Ptr(engineProgressBar(*state.ProgressBar))
 	}
-	return State{SessionShell: state.SessionShell, Cols: state.Cols, Rows: state.Rows, Cursor: Cursor(state.Cursor), Title: state.Title, Cwd: state.Cwd, LastCommand: state.LastCommand, LastExit: state.LastExit, ExitSignal: state.ExitSignal, Exited: state.Exited, Ready: state.Ready, BellCount: state.BellCount, ProgressBar: progress, Modes: state.Modes, MouseMode: state.MouseMode, Colors: TerminalColors(state.Colors), Timeouts: EffectiveTimeouts(state.Timeouts), Text: state.Text}
+	return State{ProgramStatuses: engineProgramStatuses(state.ProgramStatuses), SessionShell: state.SessionShell, Cols: state.Cols, Rows: state.Rows, Cursor: Cursor(state.Cursor), Title: state.Title, Cwd: state.Cwd, LastCommand: state.LastCommand, LastExit: state.LastExit, ExitSignal: state.ExitSignal, Exited: state.Exited, Ready: state.Ready, BellCount: state.BellCount, ProgressBar: progress, Modes: state.Modes, MouseMode: state.MouseMode, Colors: TerminalColors(state.Colors), Timeouts: EffectiveTimeouts(state.Timeouts), Text: state.Text}
 }
 func engineCells(cells []native.Cell) []Cell {
 	if cells == nil {

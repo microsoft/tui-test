@@ -63,9 +63,30 @@ fn progress_bar(s: &mut Storage, v: tui_test::api::ProgressBar) -> TuiProgressBa
     }
 }
 #[allow(unused_variables)]
+fn program_status(s: &mut Storage, v: tui_test::api::ProgramStatus) -> TuiProgramStatus {
+    TuiProgramStatus {
+        id: s.string(v.id),
+        state: s.string(v.state.as_str().to_owned()),
+        app: s.optional(v.app),
+        title: s.optional(v.title),
+        message: s.optional(v.message),
+        kind: s.optional(v.kind.map(|v| v.as_str().to_owned())),
+        progress: TuiOptionalU64 {
+            present: v.progress.is_some(),
+            value: u64::from(v.progress.unwrap_or_default()),
+        },
+    }
+}
+#[allow(unused_variables)]
 fn state(s: &mut Storage, v: tui_test::api::State) -> TuiState {
+    let program_statuses = match v.program_statuses {
+        Some(values) => s.program_statuses(values),
+        None => (std::ptr::null(), 0),
+    };
     let modes = s.modes(v.modes);
     TuiState {
+        program_statuses: program_statuses.0,
+        program_statuses_len: program_statuses.1,
         progress_bar: TuiOptionalProgressBar {
             present: v.progress_bar.is_some(),
             value: v

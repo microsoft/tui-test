@@ -20,7 +20,7 @@ repository = "https://github.com/microsoft/tui-test"
 
 [workspace.dependencies]
 alacritty_terminal = "0.26.0"
-rio-vt = "0.5.29"
+rio-vt = "0.5.31"
 anyhow = "1.0.102"
 base64 = "0.22.1"
 bitflags = "2.13.1"

@@ -23,6 +23,50 @@ import { withTerminal } from "../dist/test/index.js";
 
 const shell = process.platform === "win32" ? "pwsh" : undefined;
 
+test("OSC program status supports IDs, decoded text, partial matches, and invalid filters", async () => {
+  const terminal = TuiTest.ephemeral("program-status", { backend: "ghostty" });
+  try {
+    await terminal.run(process.execPath, runtimeScript(`
+      process.stdout.write("\\x1b]7501;state=working:app=demo\\x07");
+      process.stdout.write("\\x1b]7501;state=blocked:id=build:kind=permission:progress=50:title=QnVpbGQ=:msg=SGVsbG8g8J+MjQ==\\x07");
+      process.stdin.resume();
+    `), { waitReady: false });
+    const expected = Object.freeze({ id: "build", state: "blocked", progress: 50 });
+    await terminal.waitProgramStatus(expected);
+    await terminal.expectProgramStatus({ id: "build", app: "demo", title: "Build", message: "Hello 🌍", kind: "permission" });
+    const values = await terminal.getProgramStatuses();
+    assert.deepEqual(values.map((value) => value.id), ["", "build"]);
+    assert.deepEqual(await terminal.getProgramStatus("build"), values[1]);
+    assert.deepEqual(await terminal.getProgramStatus(), values[0]);
+    assert.equal(await terminal.getProgramStatus("missing"), null);
+    assert.deepEqual((await terminal.state()).program_statuses, values);
+    await terminal.waitProgramStatus();
+    await assert.rejects(terminal.expectProgramStatus({ id: "missing" }, { timeout: 0 }), (error) => {
+      assert.ok(error instanceof ExpectationError);
+      assert.equal(error.details.operation, "expect.program_status");
+      return true;
+    });
+    for (const invalid of [{ state: "unknown" }, { kind: "unknown" }, { progress: 101 }, { id: "bad//id" }, { unknown: 1 }]) {
+      await assert.rejects(terminal.waitProgramStatus(invalid), UsageError);
+    }
+    await assert.rejects(terminal.getProgramStatus("bad//id"), UsageError);
+    assert.deepEqual(expected, { id: "build", state: "blocked", progress: 50 });
+  } finally {
+    await terminal.closeQuiet();
+  }
+});
+
+test("unsupported program status is null in snapshots and raises a usage error", async () => {
+  const terminal = TuiTest.ephemeral("unsupported-status", { backend: "alacritty" });
+  try {
+    await terminal.run(process.execPath, runtimeScript("process.stdin.resume()"), { waitReady: false });
+    assert.equal((await terminal.state()).program_statuses, null);
+    await assert.rejects(terminal.getProgramStatuses(), UsageError);
+  } finally {
+    await terminal.closeQuiet();
+  }
+});
+
 test("OSC progress bar supports partial matches, state reads, and errors", async () => {
   const terminal = TuiTest.ephemeral("progress-bar", { backend: "ghostty" });
   try {

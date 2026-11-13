@@ -420,6 +420,45 @@ pub unsafe extern "C" fn tui_get_progress_bar_start(session: TuiString) -> *mut 
 /// Start a typed call after copying all borrowed inputs.
 /// # Safety
 /// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_get_program_statuses_start(session: TuiString) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_get_program_statuses(session) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_get_program_status_start(
+    session: TuiString,
+    id: TuiString,
+) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_get_program_status(session, id) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_wait_program_status_start(
+    session: TuiString,
+    expected: TuiProgramStatusMatch,
+    timeout_ms: TuiOptionalU64,
+) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_wait_program_status(session, expected, timeout_ms) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_expect_program_status_start(
+    session: TuiString,
+    expected: TuiProgramStatusMatch,
+    timeout_ms: TuiOptionalU64,
+) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_expect_program_status(session, expected, timeout_ms) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
 pub unsafe extern "C" fn tui_wait_progress_bar_start(
     session: TuiString,
     expected: TuiProgressBarMatch,

@@ -309,9 +309,9 @@ dependencies = [
 
 [[package]]
 name = "corcovado"
-version = "0.5.29"
+version = "0.5.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cba695e51805c1acd3501c7561dec661b81394376c4493b46c49bdf39889741"
+checksum = "8d2d955122b68bd5681470864a615e15415d12ae2a6006338439eec824db69dc"
 dependencies = [
  "libc",
  "miow 0.5.0",
@@ -1007,9 +1007,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.12.4"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1292b7759ae1cb9ec195452d1390a074f0cd8541ab7a5a8c31cd6db45d4a6ba"
+checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -1045,9 +1045,9 @@ dependencies = [
 
 [[package]]
 name = "rio-grapheme-width"
-version = "0.5.29"
+version = "0.5.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef9487fce3556a0b27b6598a956c4402a46b8bb25afe2ec53ab0378c75e402c"
+checksum = "ec18e7e73e576959b1d14128320c1b22e8d06496e0938c578304813080c42668"
 dependencies = [
  "phf",
  "ucd-trie",
@@ -1055,9 +1055,9 @@ dependencies = [
 
 [[package]]
 name = "rio-graphics"
-version = "0.5.29"
+version = "0.5.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "736eb317aa3bdb7256f58b1ad18f971a831d6de928854a9aee6e13c6792bcf19"
+checksum = "401446a88afb5b8c2200fe0ed4e17a291977a4606e6fce0658c1cab25b409cbd"
 dependencies = [
  "rustc-hash",
  "tracing",
@@ -1066,15 +1066,15 @@ dependencies = [
 
 [[package]]
 name = "rio-unicode"
-version = "0.5.29"
+version = "0.5.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed68c9eaee951073cac248ece99f5f1ebabf92a1c0305ac28fa622a8fa1679d5"
+checksum = "f838370873208d62f95c6196309410e81f6a8b0b80862ee01e2a0bc3a864a7dd"
 
 [[package]]
 name = "rio-vt"
-version = "0.5.29"
+version = "0.5.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28b1c817c56394ca5777f25a66925e9700e6d395154c7f55f1100a5f8cb0ef39"
+checksum = "a862f3f345cf6e2ecdd407430126b42a4fc6e630365b071eed9d75e0c27ca11e"
 dependencies = [
  "base64 0.23.1",
  "bitflags 2.13.1",
@@ -1405,9 +1405,9 @@ dependencies = [
 
 [[package]]
 name = "teletypewriter"
-version = "0.5.29"
+version = "0.5.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "184dad5c0e9838908962751c877e10defda2cb0878f9fa9041e0404f2792adf8"
+checksum = "ba1181505f91d691ce005171277b367853927da32abae8a2b9d57d2428194201"
 dependencies = [
  "corcovado",
  "dirs",

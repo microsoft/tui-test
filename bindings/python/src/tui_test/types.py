@@ -219,6 +219,32 @@ class ProgressBarMatch:
     progress: Optional[int] = None
 
 
+ProgramState = Literal["idle", "working", "done", "blocked", "error"]
+ProgramStatusKind = Literal["permission", "question", "auth"]
+
+
+@dataclass
+class ProgramStatus:
+    id: str
+    state: ProgramState
+    app: Optional[str] = None
+    title: Optional[str] = None
+    message: Optional[str] = None
+    kind: Optional[ProgramStatusKind] = None
+    progress: Optional[int] = None
+
+
+@dataclass
+class ProgramStatusMatch:
+    id: str = ""
+    state: Optional[ProgramState] = None
+    app: Optional[str] = None
+    title: Optional[str] = None
+    message: Optional[str] = None
+    kind: Optional[ProgramStatusKind] = None
+    progress: Optional[int] = None
+
+
 @dataclass
 class TextStyle:
     foreground: Optional[str] = None
@@ -280,6 +306,7 @@ class State:
     text: str
     session_shell: Optional[str]
     bell_count: int = 0
+    program_statuses: Optional[List[ProgramStatus]] = None
     progress_bar: Optional[ProgressBar] = None
     modes: Dict[str, bool] = field(default_factory=dict)
     mouse_mode: str = "none"
@@ -299,6 +326,8 @@ class State:
             exited=d.get("exited"),
             ready=d.get("ready", False),
             bell_count=d.get("bell_count", 0),
+            program_statuses=([ProgramStatus(**value) for value in d["program_statuses"]]
+                              if d.get("program_statuses") is not None else None),
             progress_bar=ProgressBar(**d["progress_bar"]) if d.get("progress_bar") is not None else None,
             modes=d.get("modes", {}),
             mouse_mode=d.get("mouse_mode", "none"),

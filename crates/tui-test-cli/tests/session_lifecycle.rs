@@ -18,6 +18,79 @@ mod cli_config;
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 
 #[test]
+fn program_status_commands_select_ids_and_match_partial_fields() {
+    let sandbox = Sandbox::new("program-status");
+    sandbox.ok(&["run", "--backend", "ghostty", "--", "python3", "-u", "-c",
+        "import sys; sys.stdout.write('\\x1b]7501;state=working:app=demo\\x07\\x1b]7501;state=blocked:id=build:kind=permission:progress=50:title=QnVpbGQ=:msg=SGVsbG8g8J+MjQ==\\x07'); sys.stdout.flush(); sys.stdin.read()"]);
+    sandbox.ok(&[
+        "wait",
+        "program-status",
+        "--id",
+        "build",
+        "--state",
+        "blocked",
+    ]);
+    sandbox.ok(&[
+        "expect",
+        "program-status",
+        "--id",
+        "build",
+        "--app",
+        "demo",
+        "--kind",
+        "permission",
+        "--progress",
+        "50",
+        "--title",
+        "Build",
+        "--message",
+        "Hello 🌍",
+    ]);
+    sandbox.ok(&["wait", "program-status"]);
+    let list: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "get", "program-status"])).unwrap();
+    assert_eq!(list["data"]["value"][0]["id"], "");
+    assert_eq!(list["data"]["value"][1]["id"], "build");
+    let single: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "get", "program-status", "--id", "build"]))
+            .unwrap();
+    assert_eq!(single["data"]["value"], list["data"]["value"][1]);
+    let missing: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "get", "program-status", "--id", "missing"]))
+            .unwrap();
+    assert!(missing["data"]["value"].is_null());
+    let root: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "get", "program-status", "--id", ""]))
+            .unwrap();
+    assert_eq!(root["data"]["value"]["state"], "working");
+    assert_eq!(
+        sandbox
+            .run(&[
+                "expect",
+                "program-status",
+                "--id",
+                "missing",
+                "--timeout",
+                "0"
+            ])
+            .status
+            .code(),
+        Some(1)
+    );
+    for args in [
+        vec!["wait", "program-status", "--progress", "101"],
+        vec!["wait", "program-status", "--state", "unknown"],
+        vec!["wait", "program-status", "--kind", "unknown"],
+        vec!["wait", "program-status", "--id", "bad//id"],
+        vec!["get", "program-status", "--id", "bad//id"],
+        vec!["get", "title", "--id", "build"],
+    ] {
+        assert_eq!(sandbox.run(&args).status.code(), Some(2), "{args:?}");
+    }
+    sandbox.ok(&["close"]);
+}
+
+#[test]
 fn progress_bar_commands_match_optional_fields() {
     let sandbox = Sandbox::new("progress-bar");
     sandbox.ok(&[

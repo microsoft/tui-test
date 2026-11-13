@@ -400,6 +400,9 @@ pub enum Command {
         /// Field to print.
         #[arg(value_enum)]
         field: GetArg,
+        /// Program status ID. An empty string selects the root.
+        #[arg(long)]
+        id: Option<String>,
     },
     /// Type literal text.
     Type {
@@ -1270,6 +1273,8 @@ pub enum DaemonCmd {
 #[derive(Clone, Copy, clap::ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 pub enum GetArg {
+    /// OSC 7501 program statuses, or one status with --id.
+    ProgramStatus,
     /// Current OSC 9;4 progress state and percentage.
     ProgressBar,
     /// Scrollback offset and available history, in rows.
@@ -1685,6 +1690,49 @@ impl From<ProgressStateArg> for tui_test::api::ProgressState {
 }
 
 #[derive(Args)]
+pub struct ProgramStatusArgs {
+    /// Status ID. The default selects the root.
+    #[arg(long, default_value = "")]
+    pub id: String,
+    /// Expected state.
+    #[arg(long, value_parser = ["idle", "working", "done", "blocked", "error"])]
+    pub state: Option<String>,
+    /// Expected request kind.
+    #[arg(long, value_parser = ["permission", "question", "auth"])]
+    pub kind: Option<String>,
+    #[arg(long)]
+    pub app: Option<String>,
+    #[arg(long)]
+    pub title: Option<String>,
+    #[arg(long)]
+    pub message: Option<String>,
+    /// Expected percentage, from 0 to 100.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100))]
+    pub progress: Option<u8>,
+    /// Timeout in milliseconds.
+    #[arg(long, value_name = "MS")]
+    pub timeout: Option<u64>,
+}
+
+impl ProgramStatusArgs {
+    pub fn expected(self) -> tui_test::api::ProgramStatusMatch {
+        tui_test::api::ProgramStatusMatch {
+            id: self.id,
+            state: self.state.map(|v| {
+                serde_json::from_value(serde_json::Value::String(v)).expect("validated state")
+            }),
+            kind: self.kind.map(|v| {
+                serde_json::from_value(serde_json::Value::String(v)).expect("validated kind")
+            }),
+            app: self.app,
+            title: self.title,
+            message: self.message,
+            progress: self.progress,
+        }
+    }
+}
+
+#[derive(Args)]
 pub struct ProgressBarArgs {
     /// Expected progress state.
     #[arg(long, value_enum)]
@@ -1699,6 +1747,8 @@ pub struct ProgressBarArgs {
 
 #[derive(Subcommand)]
 pub enum WaitCmd {
+    /// Wait for an OSC 7501 status to match the supplied fields.
+    ProgramStatus(ProgramStatusArgs),
     /// Wait for the OSC 9;4 progress bar to match the supplied fields.
     ProgressBar(ProgressBarArgs),
     /// Wait for text to appear or disappear.
@@ -1794,6 +1844,8 @@ pub enum WaitCmd {
 
 #[derive(Subcommand)]
 pub enum ExpectCmd {
+    /// Assert an OSC 7501 status matches the supplied fields.
+    ProgramStatus(ProgramStatusArgs),
     /// Assert the OSC 9;4 progress bar matches the supplied fields.
     ProgressBar(ProgressBarArgs),
     /// Assert a nested locator query, with retries.
@@ -1967,7 +2019,8 @@ mod scroll_tests {
                 .unwrap()
                 .command,
             Some(Command::Get {
-                field: GetArg::Viewport
+                field: GetArg::Viewport,
+                ..
             })
         ));
     }

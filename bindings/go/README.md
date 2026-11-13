@@ -355,6 +355,14 @@ Asciicast remains a timestamped output stream; FPS sampling does not change it.
 Only Ghostty and Rio support these methods. Other backends return `UsageError` and expose `State.ProgressBar=nil`.
 See [application progress](../../README.md#application-progress) for states and a runnable Rust example.
 
+### Program status
+
+`GetProgramStatuses()` lists OSC 7501 records in stable ID order.
+`GetProgramStatus(id)` returns a `*ProgramStatus`, or `nil` when absent.
+`WaitProgramStatus` and `ExpectProgramStatus` accept `ProgramStatusMatch` and `WaitOptions`.
+Select `Backend: tuitest.Ghostty` or `Backend: tuitest.Rio`. Other backends return usage errors; their `State.ProgramStatuses` is `nil`.
+See [program status](../../README.md#program-status) for record semantics and the runnable example.
+
 ## Test cleanup
 
 The `tuitesttest` package creates unique sessions and registers cleanup before starting the terminal. It closes the session when the test ends, including after a fatal test failure.

@@ -25,6 +25,8 @@ func TestTerminalProcess(t *testing.T) {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		switch scanner.Text() {
+		case "program-status":
+			fmt.Print("\x1b]7501;state=working:app=demo\x07\x1b]7501;state=blocked:id=build:kind=permission:progress=50:title=QnVpbGQ=:msg=SGVsbG8g8J+MjQ==\x07")
 		case "progress":
 			fmt.Print("\x1b]9;4;1;50\x07")
 		case "indeterminate":
@@ -344,6 +346,77 @@ func TestInputAndState(t *testing.T) {
 	requireNoError(t, terminal.GetByText("received:hello", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}))
 	requireNoError(t, terminal.Submit(tuitest.Ptr("quit")))
 	requireNoError(t, terminal.WaitExit(tuitest.WaitOptions{Timeout: tuitest.Ptr(10 * time.Second)}))
+}
+
+func TestProgramStatus(t *testing.T) {
+	terminal := newTerminal(t, tuitest.ClientOptions{Backend: tuitest.Ghostty})
+	initial, err := terminal.GetProgramStatuses()
+	requireNoError(t, err)
+	if initial == nil || len(initial) != 0 {
+		t.Fatalf("initial=%+v", initial)
+	}
+	empty, err := terminal.State()
+	requireNoError(t, err)
+	if empty.ProgramStatuses == nil || len(empty.ProgramStatuses) != 0 {
+		t.Fatalf("initial state=%+v", empty.ProgramStatuses)
+	}
+	requireNoError(t, terminal.Submit(tuitest.Ptr("program-status")))
+	expected := tuitest.ProgramStatusMatch{ID: "build", State: tuitest.Ptr(tuitest.ProgramBlocked), Progress: tuitest.Ptr(uint8(50))}
+	requireNoError(t, terminal.WaitProgramStatus(expected, tuitest.WaitOptions{}))
+	requireNoError(t, terminal.ExpectProgramStatus(tuitest.ProgramStatusMatch{ID: "build",
+		App: tuitest.Ptr("demo"), Title: tuitest.Ptr("Build"), Message: tuitest.Ptr("Hello 🌍"),
+		Kind: tuitest.Ptr(tuitest.ProgramPermission)}, tuitest.WaitOptions{}))
+	values, err := terminal.GetProgramStatuses()
+	requireNoError(t, err)
+	if len(values) != 2 || values[0].ID != "" || values[1].ID != "build" {
+		t.Fatalf("statuses=%+v", values)
+	}
+	value, err := terminal.GetProgramStatus("build")
+	requireNoError(t, err)
+	if value == nil || value.State != tuitest.ProgramBlocked || *value.Progress != 50 {
+		t.Fatalf("status=%+v", value)
+	}
+	root, err := terminal.GetProgramStatus("")
+	requireNoError(t, err)
+	if root == nil || root.State != tuitest.ProgramWorking {
+		t.Fatalf("root=%+v", root)
+	}
+	missing, err := terminal.GetProgramStatus("missing")
+	requireNoError(t, err)
+	if missing != nil {
+		t.Fatalf("missing=%+v", missing)
+	}
+	state, err := terminal.State()
+	requireNoError(t, err)
+	if len(state.ProgramStatuses) != 2 || *state.ProgramStatuses[1].Message != "Hello 🌍" {
+		t.Fatalf("state=%+v", state.ProgramStatuses)
+	}
+	requireNoError(t, terminal.WaitProgramStatus(tuitest.ProgramStatusMatch{}, tuitest.WaitOptions{}))
+	err = terminal.ExpectProgramStatus(tuitest.ProgramStatusMatch{ID: "missing"}, tuitest.WaitOptions{Timeout: tuitest.Ptr(time.Duration(0))})
+	var failure *tuitest.Error
+	if !errors.As(err, &failure) || failure.Kind != tuitest.AssertionError || failure.Details.Operation != "expect.program_status" {
+		t.Fatalf("error=%v", err)
+	}
+	for _, invalid := range []tuitest.ProgramStatusMatch{
+		{ID: "bad//id"}, {Progress: tuitest.Ptr(uint8(101))},
+		{State: tuitest.Ptr(tuitest.ProgramState("unknown"))}, {Kind: tuitest.Ptr(tuitest.ProgramStatusKind("unknown"))},
+	} {
+		err = terminal.WaitProgramStatus(invalid, tuitest.WaitOptions{})
+		if !errors.As(err, &failure) || failure.Kind != tuitest.UsageError {
+			t.Fatalf("error=%v", err)
+		}
+	}
+}
+
+func TestProgramStatusUnsupported(t *testing.T) {
+	terminal := newTerminal(t, tuitest.ClientOptions{Backend: tuitest.Alacritty})
+	_, err := terminal.GetProgramStatuses()
+	requireKind(t, err, tuitest.UsageError)
+	state, err := terminal.State()
+	requireNoError(t, err)
+	if state.ProgramStatuses != nil {
+		t.Fatalf("unsupported status=%+v", state.ProgramStatuses)
+	}
 }
 
 func TestProgressBar(t *testing.T) {

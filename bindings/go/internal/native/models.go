@@ -313,6 +313,24 @@ type ProgressBarMatch struct {
 	State    *ProgressState
 	Progress *uint8
 }
+type ProgramState string
+type ProgramStatusKind string
+
+type ProgramStatus struct {
+	ID                  string
+	State               ProgramState
+	App, Title, Message *string
+	Kind                *ProgramStatusKind
+	Progress            *uint8
+}
+
+type ProgramStatusMatch struct {
+	ID                  string
+	State               *ProgramState
+	App, Title, Message *string
+	Kind                *ProgramStatusKind
+	Progress            *uint8
+}
 
 type TextPosition struct{ Row, Column uint32 }
 
@@ -341,6 +359,7 @@ type State struct {
 	Exited                  *int32
 	Ready                   bool
 	BellCount               uint64
+	ProgramStatuses         []ProgramStatus
 	ProgressBar             *ProgressBar
 	Modes                   map[string]bool
 	MouseMode               string

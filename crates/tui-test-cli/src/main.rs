@@ -541,7 +541,14 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             cmd: RecordCmd::Resume,
         } => Request::ResumeRecording,
         Command::Cells { x, y, w, h } => Request::Cells { x, y, w, h },
-        Command::Get { field } => Request::Get {
+        Command::Get {
+            field: GetArg::ProgramStatus,
+            id: Some(id),
+        } => Request::GetProgramStatus { id },
+        Command::Get { id: Some(_), .. } => {
+            return Err(anyhow::anyhow!("--id is only valid for get program-status"))
+        }
+        Command::Get { field, id: None } => Request::Get {
             field: map_field(field),
         },
         Command::Type { text } => Request::Write { data: text },
@@ -631,6 +638,7 @@ fn map_field(field: GetArg) -> GetField {
         GetArg::Title => GetField::Title,
         GetArg::Clipboard => GetField::Clipboard,
         GetArg::ProgressBar => GetField::ProgressBar,
+        GetArg::ProgramStatus => GetField::ProgramStatuses,
         GetArg::Bells => GetField::BellCount,
         GetArg::BellEvents => GetField::BellEvents,
     }
@@ -750,6 +758,10 @@ fn map_wait(what: WaitCmd) -> anyhow::Result<Request> {
                 progress: args.progress,
             },
             timeout_ms: args.timeout,
+        },
+        WaitCmd::ProgramStatus(args) => Request::WaitProgramStatus {
+            timeout_ms: args.timeout,
+            expected: args.expected(),
         },
         WaitCmd::Bell { timeout } => Request::WaitBell {
             timeout_ms: timeout,
@@ -990,6 +1002,10 @@ fn map_expect(what: ExpectCmd) -> anyhow::Result<Request> {
                 progress: args.progress,
             },
             timeout_ms: args.timeout,
+        },
+        ExpectCmd::ProgramStatus(args) => Request::ExpectProgramStatus {
+            timeout_ms: args.timeout,
+            expected: args.expected(),
         },
         ExpectCmd::Bell { count, timeout } => Request::ExpectBellCount {
             count,

@@ -62,9 +62,9 @@ function validate(type, value, label) {
   const fields = models[type];
   if (!fields) throw error("internal", `unknown native model ${type}`);
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
-  if (type === "ProgressBarMatch") {
+  if (type === "ProgressBarMatch" || type === "ProgramStatusMatch") {
     for (const key of Object.keys(value)) {
-      if (!Object.hasOwn(fields, key)) throw new TypeError(`unknown progress field ${JSON.stringify(key)}`);
+      if (!Object.hasOwn(fields, key)) throw new TypeError(`unknown ${type === "ProgramStatusMatch" ? "program-status" : "progress"} field ${JSON.stringify(key)}`);
     }
   }
   if (type.startsWith("Locator") || ["RenderStyle", "FontFamilies", "WindowStyle", "BorderStyle", "ShadowStyle", "RecordingCursorStyle", "PaddingSides"].includes(type)) {
@@ -73,7 +73,7 @@ function validate(type, value, label) {
     }
   }
   return Object.fromEntries(Object.entries(fields).map(([key, [field, fieldType]]) => [
-    field, validate(fieldType, value[key], label ? `${label}.${key}` : key),
+    field, validate(fieldType, type === "ProgramStatusMatch" && key === "id" ? value[key] ?? "" : value[key], label ? `${label}.${key}` : key),
   ]));
 }
 
@@ -144,7 +144,8 @@ function decode(type, value) {
     if (field.endsWith("_len")) continue;
     let decoded;
     if (fieldType.startsWith("*")) {
-      decoded = array(fieldType.slice(1), value[field], value[`${field}_len`]);
+      decoded = field === "program_statuses" && value[field] === null
+        ? null : array(fieldType.slice(1), value[field], value[`${field}_len`]);
       if (field === "modes") decoded = Object.fromEntries(decoded.map((m) => [m.name, m.enabled]));
       if (field === "palette") decoded = Object.fromEntries(decoded.map((p) => [p.key, p.value]));
     } else if (fieldType.startsWith("Tui")) decoded = decode(fieldType, value[field]);
@@ -159,6 +160,8 @@ function resultValue(result, selector) {
     case "Unit": return undefined;
     case "Open": return decode("TuiOpenResult", result.open);
     case "State": return decode("TuiState", result.state);
+    case "ProgramStatus": return decode("TuiOptionalProgramStatus", result.program_status);
+    case "ProgramStatuses": return array("TuiProgramStatus", result.program_statuses, result.program_statuses_len);
     case "ProgressBar": return decode("TuiProgressBar", result.progress_bar);
     case "Cursor": return decode("TuiCursor", result.cursor);
     case "Modes": return Object.fromEntries(array("TuiMode", result.modes, result.modes_len).map((mode) => [mode.name, mode.enabled]));
@@ -388,6 +391,8 @@ export function createAdapter(functions) {
         case "mouseScroll": native = [s(v.direction), v.amount ?? 3]; break;
         case "waitTitle": case "expectTitle": case "waitClipboard": native = [s(v.text), wait(options)]; break;
         case "waitProgressBar": case "expectProgressBar": native = [input.struct("TuiProgressBarMatch", v.expected), u(v.timeoutMs)]; break;
+        case "getProgramStatus": native = [s(v.id)]; break;
+        case "waitProgramStatus": case "expectProgramStatus": native = [input.struct("TuiProgramStatusMatch", v.expected), u(v.timeoutMs)]; break;
         case "waitIdle": case "waitCommand": case "waitExit": case "waitReady": case "waitBell": native = [u(v.timeoutMs)]; break;
         case "findLocator": native = [input.struct("TuiQuery", locator(v.expression)), v.requireOne ?? false]; break;
         case "waitLocator": case "expectLocator": native = [input.struct("TuiQuery", locator(v.expression)), wait({ not: v.not, timeout_ms: v.timeoutMs })]; break;

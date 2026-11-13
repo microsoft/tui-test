@@ -504,6 +504,14 @@ const terminal = new TuiTest("test", {
 Only Ghostty and Rio support these methods. Other backends raise `UsageError` and expose `progress_bar: null` in snapshots.
 See [application progress](../../README.md#application-progress) for states and a runnable Rust example.
 
+### Program status
+
+`getProgramStatuses()` lists OSC 7501 records in stable ID order.
+`getProgramStatus(id = "")` returns one record, or `null` when absent.
+`waitProgramStatus(expected, opts)` and `expectProgramStatus(expected, opts)` compare supplied fields; the default ID selects the root.
+Select `backend: "ghostty"` or `backend: "rio"`. Other backends raise `UsageError`; their `state().program_statuses` is `null`.
+See [program status](../../README.md#program-status) for record semantics and the runnable example.
+
 ### Errors
 
 | Error | `exitCode` |

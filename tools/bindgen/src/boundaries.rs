@@ -98,6 +98,7 @@ const OUTPUTS: &[&str] = &[
     "EffectiveTimeouts",
     "BellEvent",
     "ProgressBar",
+    "ProgramStatus",
     "State",
     "TerminalColors",
     "Cell",
@@ -166,7 +167,12 @@ fn option(ty: &str) -> Option<&str> {
 }
 fn c_type(ty: &str) -> Result<String> {
     Ok(match ty {
-        "ProgressState" | "Option<ProgressState>" => "TuiString".into(),
+        "ProgressState"
+        | "Option<ProgressState>"
+        | "ProgramState"
+        | "Option<ProgramState>"
+        | "ProgramStatusKind"
+        | "Option<ProgramStatusKind>" => "TuiString".into(),
         "String" | "Option<String>" | "PathBuf" | "Option<PathBuf>" => "TuiString".into(),
         "Option<u64>" | "Option<u32>" | "Option<u16>" | "Option<u8>" => "TuiOptionalU64".into(),
         "Option<i32>" => "TuiOptionalI32".into(),
@@ -187,7 +193,8 @@ fn c_output(ty: &str, value: &str) -> Result<String> {
         "Option<String>" => format!("s.optional({value})"),
         "Option<i32>" => format!("integer({value})"),
         "Option<u32>" | "Option<u8>" => format!("TuiOptionalU64 {{ present: {value}.is_some(), value: u64::from({value}.unwrap_or_default()) }}"),
-        "ProgressState" => format!("s.string({value}.as_str().to_owned())"),
+        "ProgressState" | "ProgramState" | "ProgramStatusKind" => format!("s.string({value}.as_str().to_owned())"),
+        "Option<ProgramStatusKind>" => format!("s.optional({value}.map(|v| v.as_str().to_owned()))"),
         "CellColor" => format!("color({value})"),
         t if OUTPUTS.contains(&t) => format!("{}(s, {value})", snake(t)),
         t if option(t).is_some_and(|inner| OUTPUTS.contains(&inner)) => {
@@ -232,8 +239,9 @@ fn output_models(models: &Models, c: &mut String, cc: &mut String) -> Result<()>
             let field = ident(&f.name);
             let cfield = if f.name == "char" { "character" } else { field };
             let value = format!("v.{field}");
-            let array = match f.ty.as_str() {
+            let array = match option(&f.ty).unwrap_or(&f.ty) {
                 "Vec<TextSpan>" => Some(("TuiSpan", "spans")),
+                "Vec<ProgramStatus>" => Some(("TuiProgramStatus", "program_statuses")),
                 "BTreeMap<String,bool>" => Some(("TuiMode", "modes")),
                 "std::collections::BTreeMap<u8,String>" => Some(("TuiPair", "palette")),
                 _ => None,
@@ -246,7 +254,11 @@ fn output_models(models: &Models, c: &mut String, cc: &mut String) -> Result<()>
                 }
             }
             if let Some((_, helper)) = array {
-                writeln!(cc, "let {cfield} = s.{helper}({value});")?;
+                if option(&f.ty).is_some() {
+                    writeln!(cc, "let {cfield} = match {value} {{ Some(values) => s.{helper}(values), None => (std::ptr::null(), 0) }};")?;
+                } else {
+                    writeln!(cc, "let {cfield} = s.{helper}({value});")?;
+                }
                 writeln!(init, "{cfield}: {cfield}.0, {cfield}_len: {cfield}.1,")?;
             } else {
                 let expr = if model == "EffectiveTimeouts" {
@@ -458,6 +470,7 @@ fn input_models(models: &Models, c: &mut String, ci: &mut String) -> Result<()> 
         ("MouseOptions", "MouseOptions"),
         ("Operation::WaitTitle", "WaitOptions"),
         ("ProgressBarMatch", "ProgressBarMatch"),
+        ("ProgramStatusMatch", "ProgramStatusMatch"),
         ("Operation::StartRecording", "RecordingOptions"),
         ("Operation::Screenshot", "ScreenshotOptions"),
         ("Operation::ExpectCursor", "CursorExpectation"),

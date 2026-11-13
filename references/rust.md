@@ -170,3 +170,14 @@ An optional first argument selects another output directory.
 Use `ExecutionContext` with `FailureArtifactOptions` to write failure artifacts. `TuiTestError` exposes the structured details and artifact reference.
 
 Full API: [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/)
+
+## Program status
+
+`Operation::GetProgramStatuses` returns the OSC 7501 records in stable ID order.
+`Operation::GetProgramStatus { id }` returns one record, or `None` when absent.
+Ghostty and Rio support these operations. Other backends return usage errors and `None` in state and diagnostic snapshots.
+
+`Operation::WaitProgramStatus` and `Operation::ExpectProgramStatus` accept `expected: ProgramStatusMatch` and `timeout_ms`.
+A default match selects the root record through its empty ID.
+Supplied fields must match exactly. An absent record never matches.
+See [program status](../README.md#program-status) for record semantics and the runnable example.

@@ -1856,6 +1856,7 @@ fn capture_failure_observation_locked(
         target_arch: std::env::consts::ARCH.to_string(),
     };
     FailureObservation {
+        program_statuses: state.emu.program_statuses(),
         progress_bar: state.emu.progress_bar(),
         rows: snapshot.rows,
         cols: snapshot.cols,
@@ -2133,6 +2134,51 @@ fn dispatch(
             Ok(OperationResult::Unit)
         }
         Operation::GetBellCount => Ok(OperationResult::BellCount(session.bells.count())),
+        Operation::GetProgramStatuses => Ok(OperationResult::ProgramStatuses(
+            session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .emu
+                .program_statuses()
+                .ok_or_else(|| {
+                    TuiTestError::usage("program status is unsupported by this backend")
+                })?,
+        )),
+        Operation::GetProgramStatus { id } => {
+            if !crate::api::valid_program_status_id(&id) {
+                return Err(TuiTestError::usage("invalid program-status id"));
+            }
+            Ok(OperationResult::ProgramStatus(
+                session
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .emu
+                    .program_statuses()
+                    .ok_or_else(|| {
+                        TuiTestError::usage("program status is unsupported by this backend")
+                    })?
+                    .into_iter()
+                    .find(|record| record.id == id),
+            ))
+        }
+        Operation::WaitProgramStatus {
+            expected,
+            timeout_ms,
+        }
+        | Operation::ExpectProgramStatus {
+            expected,
+            timeout_ms,
+        } => {
+            expect_program_status(
+                &waiting,
+                expected,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+                operation_name,
+            )?;
+            Ok(OperationResult::Unit)
+        }
         Operation::GetProgressBar => Ok(OperationResult::ProgressBar(
             session
                 .state
@@ -2411,6 +2457,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
     let (cols, rows) = state.emu.size();
     let bells = session.bells.snapshot();
     crate::api::State {
+        program_statuses: state.emu.program_statuses(),
         progress_bar: state.emu.progress_bar(),
         session_shell: session.shell.map(|value| value.as_str().to_string()),
         cols,
@@ -4289,6 +4336,59 @@ fn expect_output(session: &TerminalSession, text: &str, regex: bool) -> Result<(
         Err(TuiTestError::assertion(format!(
             "output did not contain '{text}'\n---\n{output}\n---"
         )))
+    }
+}
+
+fn expect_program_status(
+    session: &WaitContext<'_>,
+    expected: crate::api::ProgramStatusMatch,
+    timeout_ms: u64,
+    operation_name: &'static str,
+) -> Result<(), TuiTestError> {
+    expected.validate()?;
+    let current = || {
+        session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .emu
+            .program_statuses()
+            .map(|records| records.into_iter().find(|record| record.id == expected.id))
+    };
+    let mut actual = current()
+        .ok_or_else(|| TuiTestError::usage("program status is unsupported by this backend"))?;
+    poll_until(
+        session,
+        || {
+            actual = current().expect("backend support cannot change during a wait");
+            actual
+                .as_ref()
+                .is_some_and(|actual| expected.matches(actual))
+                || session_stopped(session)
+        },
+        timeout_ms,
+    )?;
+    if actual
+        .as_ref()
+        .is_some_and(|actual| expected.matches(actual))
+    {
+        Ok(())
+    } else {
+        let reason = if session_stopped(session) {
+            FailureReason::SessionExited
+        } else {
+            FailureReason::TimedOut
+        };
+        Err(observed_comparison_failure(
+            session,
+            operation_name,
+            Some(timeout_ms),
+            reason,
+            format!("expected program status {expected:?}; current record is {actual:?}"),
+            "program_status",
+            Some(format!("{expected:?}")),
+            Some(format!("{actual:?}")),
+        ))
     }
 }
 

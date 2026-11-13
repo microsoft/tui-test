@@ -44,6 +44,8 @@ from .types import (
     BellEvent,
     ProgressBar,
     ProgressBarMatch,
+    ProgramStatus,
+    ProgramStatusMatch,
     Cell,
     Cursor,
     Viewport,
@@ -1107,6 +1109,28 @@ class TuiTest:
 
     async def get_progress_bar(self) -> ProgressBar:
         return ProgressBar(**await self._await(self._native.get_progress_bar()))
+
+    async def get_program_statuses(self) -> List[ProgramStatus]:
+        return [ProgramStatus(**value) for value in
+                await self._await(self._native.get_program_statuses())]
+
+    async def get_program_status(self, id: str = "") -> Optional[ProgramStatus]:
+        value = await self._await(self._native.get_program_status(id))
+        return ProgramStatus(**value) if value is not None else None
+
+    async def wait_program_status(
+        self, expected: Optional[ProgramStatusMatch] = None, *, timeout: Optional[int] = None
+    ) -> None:
+        expected = expected if expected is not None else ProgramStatusMatch()
+        await self._guarded("wait.program_status", self._native.wait_program_status(
+            expected, self._timeout("text", timeout)))
+
+    async def expect_program_status(
+        self, expected: Optional[ProgramStatusMatch] = None, *, timeout: Optional[int] = None
+    ) -> None:
+        expected = expected if expected is not None else ProgramStatusMatch()
+        await self._guarded("expect.program_status", self._native.expect_program_status(
+            expected, self._timeout("text", timeout)))
 
     async def wait_progress_bar(
         self, expected: Optional[ProgressBarMatch] = None, *, timeout: Optional[int] = None
