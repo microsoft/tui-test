@@ -104,6 +104,14 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
-    demonstrate("ghostty".parse().map_err(anyhow::Error::msg)?)?;
+    let backends: Vec<_> = Backend::ALL
+        .iter()
+        .copied()
+        .filter(|backend| matches!(backend.as_str(), "ghostty" | "rio"))
+        .collect();
+    ensure!(!backends.is_empty(), "enable the ghostty or rio feature");
+    for backend in backends {
+        demonstrate(backend)?;
+    }
     Ok(())
 }

@@ -24,7 +24,6 @@ use crate::terminal::emu::{
 use self::core::GhosttyCore;
 
 mod core;
-mod program_status;
 
 #[derive(Debug)]
 enum ClipboardOperation {

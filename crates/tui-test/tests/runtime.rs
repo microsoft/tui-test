@@ -82,7 +82,7 @@ fn program_status_uses_native_support_and_preserves_exit_diagnostics() {
                 timeout_ms: Some(5_000),
             })
             .unwrap();
-        if backend.as_str() != "ghostty" {
+        if !matches!(backend.as_str(), "ghostty" | "rio") {
             let OperationResult::State(state) = session.execute(Operation::State).unwrap() else {
                 panic!("expected state");
             };

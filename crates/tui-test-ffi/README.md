@@ -18,7 +18,7 @@ An absent state and an absent percentage match any current value.
 The percentage must be from 0 to 100.
 The existing `tui_screenshot` signature remains unchanged; `tui_screenshot_ptr` adds the pointer form.
 
-ABI version 12 adds native Ghostty program status. The CLI uses protocol version 14.
+ABI version 12 adds native program status on Ghostty and Rio. The CLI uses protocol version 14.
 `tui_get_program_statuses` returns `TuiResult.program_statuses` and `program_statuses_len`.
 `tui_get_program_status` returns `TuiResult.program_status`, a `TuiOptionalProgramStatus`.
 Its `present` flag distinguishes an absent record from the root record.

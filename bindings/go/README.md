@@ -360,7 +360,7 @@ See [application progress](../../README.md#application-progress) for states and 
 `GetProgramStatuses()` lists OSC 7501 records in stable ID order.
 `GetProgramStatus(id)` returns a `*ProgramStatus`, or `nil` when absent.
 `WaitProgramStatus` and `ExpectProgramStatus` accept `ProgramStatusMatch` and `WaitOptions`.
-Select `Backend: tuitest.Ghostty`. Other backends return usage errors; their `State.ProgramStatuses` is `nil`.
+Select `Backend: tuitest.Ghostty` or `Backend: tuitest.Rio`. Other backends return usage errors; their `State.ProgramStatuses` is `nil`.
 See [program status](../../README.md#program-status) for record semantics and the runnable example.
 
 ## Test cleanup

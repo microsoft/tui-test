@@ -264,7 +264,7 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 `size`, `title`, `clipboard`, `bells`, `bell-events`, `progress-bar`, and `program-status`.
 
 `get program-status` lists OSC 7501 records in stable ID order.
-These commands require `--backend ghostty`. Other backends return usage errors.
+These commands require `--backend ghostty` or `--backend rio`. Other backends return usage errors.
 `get program-status --id ID` returns one record, or `null` when the ID is absent.
 Use `--id ""` to read the root record.
 Records contain `id`, `state`, `app`, `title`, `message`, `kind`, and `progress`.

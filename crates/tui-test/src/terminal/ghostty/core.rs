@@ -23,7 +23,6 @@ use ghostty_vt::terminal::{
 };
 use ghostty_vt::{RenderState, Terminal};
 
-use super::program_status::ProgramStatuses;
 use crate::api::{ProgressBar, ProgressState};
 use crate::event::BellTracker;
 use crate::input::keys::{KeyEventKind, KeyPress, Mods};
@@ -34,6 +33,7 @@ use crate::terminal::cell::{
 use crate::terminal::emu::{
     Clipboard, ClipboardType, ColorTable, CursorShape, CursorStyle, KeyboardMode, TerminalMode,
 };
+use crate::terminal::program_status::ProgramStatuses;
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
     RgbColor {

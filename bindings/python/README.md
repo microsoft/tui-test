@@ -530,7 +530,7 @@ See [application progress](../../README.md#application-progress) for states and 
 `get_program_statuses()` lists OSC 7501 records in stable ID order.
 `get_program_status(id="")` returns a `ProgramStatus`, or `None` when absent.
 `wait_program_status(expected)` and `expect_program_status(expected)` accept `ProgramStatusMatch` and optional `timeout=`.
-Select `backend="ghostty"`. Other backends raise `UsageError`; their `state().program_statuses` is `None`.
+Select `backend="ghostty"` or `backend="rio"`. Other backends raise `UsageError`; their `state().program_statuses` is `None`.
 See [program status](../../README.md#program-status) for record semantics and the runnable example.
 
 ### Errors

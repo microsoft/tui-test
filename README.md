@@ -202,7 +202,7 @@ cargo run -p tui-test-rs --example progress_bar --all-features
 
 ## Program status
 
-Ghostty reports the [OSC 7501 program-status protocol](https://www.superlogical.com/rex/docs/build/program-status) through native callbacks.
+Ghostty and Rio report the [OSC 7501 program-status protocol](https://www.superlogical.com/rex/docs/build/program-status) through native callbacks.
 Other backends return usage errors for these operations.
 Records describe idle, active, blocked, completed, or failed work.
 They remain separate from OSC 9;4 progress reports and do not change terminal text.
@@ -225,10 +225,10 @@ The `app` field includes inheritance from the nearest ancestor.
 Reports replace records completely. Clear removes the addressed record and its descendants.
 A full reset removes all records; screen switches and soft resets preserve them.
 Process exit and shell prompts remove working and blocked records, but preserve completed and failed records.
-Ghostty owns parsing, validation, text decoding, and capability replies. tui-test retains up to 256 records.
+Each native backend owns parsing, validation, text decoding, and capability replies. tui-test retains up to 256 records.
 Session state and failure diagnostics include `program_statuses`, or `null` for unsupported backends.
 
-Run the Ghostty example:
+Run the example against Ghostty and Rio:
 
 ```sh
 cargo run -p tui-test-rs --example program_status --all-features

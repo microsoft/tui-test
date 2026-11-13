@@ -509,7 +509,7 @@ See [application progress](../../README.md#application-progress) for states and 
 `getProgramStatuses()` lists OSC 7501 records in stable ID order.
 `getProgramStatus(id = "")` returns one record, or `null` when absent.
 `waitProgramStatus(expected, opts)` and `expectProgramStatus(expected, opts)` compare supplied fields; the default ID selects the root.
-Select `backend: "ghostty"`. Other backends raise `UsageError`; their `state().program_statuses` is `null`.
+Select `backend: "ghostty"` or `backend: "rio"`. Other backends raise `UsageError`; their `state().program_statuses` is `null`.
 See [program status](../../README.md#program-status) for record semantics and the runnable example.
 
 ### Errors

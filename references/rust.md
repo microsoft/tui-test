@@ -175,7 +175,7 @@ Full API: [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/)
 
 `Operation::GetProgramStatuses` returns the OSC 7501 records in stable ID order.
 `Operation::GetProgramStatus { id }` returns one record, or `None` when absent.
-Only Ghostty supports these operations. Other backends return usage errors and `None` in state and diagnostic snapshots.
+Ghostty and Rio support these operations. Other backends return usage errors and `None` in state and diagnostic snapshots.
 
 `Operation::WaitProgramStatus` and `Operation::ExpectProgramStatus` accept `expected: ProgramStatusMatch` and `timeout_ms`.
 A default match selects the root record through its empty ID.
