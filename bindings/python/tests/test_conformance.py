@@ -16,6 +16,9 @@ MAPPING = {
     "sessions": [("module", "sessions")],
     "state": [("client", "state")],
     "text": [("client", "text")],
+    "packed-screen": [("client", "packed_screen")],
+    "trace": [("client", "finish_trace")],
+    "interrupt": [("client", "interrupt")],
     "screenshot": [("client", "screenshot")],
     "record": [("client", "start_recording"), ("client", "stop_recording")],
     "cells": [("client", "cells")],
@@ -25,6 +28,8 @@ MAPPING = {
         ("client", "get_exit_code"),
         ("client", "get_cwd"),
         ("client", "get_cursor"),
+        ("client", "get_modes"),
+        ("client", "get_colors"),
         ("client", "get_size"),
         ("client", "get_viewport"),
         ("client", "get_title"),
@@ -42,11 +47,12 @@ MAPPING = {
     "write": [("client", "write")],
     "signal": [("client", "signal")],
     "kill": [("client", "kill")],
-    "wait": [("client", "wait_title"), ("client", "wait_clipboard"), ("client", "wait_idle"), ("client", "wait_command"), ("client", "wait_exit"), ("client", "wait_bell")],
-    "expect": [("client", "get_by_text"), ("client", "expect_title"), ("client", "expect_exit_code"), ("client", "expect_output"), ("client", "expect_bell_count"), ("client", "expect_snapshot")],
+    "wait": [("locator", "wait"), ("client", "wait_title"), ("client", "wait_clipboard"), ("client", "wait_idle"), ("client", "wait_command"), ("client", "wait_exit"), ("client", "wait_bell")],
+    "expect": [("client", "get_by_text"), ("client", "expect_title"), ("client", "expect_exit_code"), ("client", "expect_output"), ("client", "expect_bell_count"), ("client", "expect_snapshot"), ("client", "expect_mode"), ("client", "expect_cursor"), ("client", "expect_colors")],
     "find": [("client", "get_by_text")],
+    "resolve": [("locator", "location")],
     "click": [("client", "get_by_text")],
-    "highlight": [("client", "get_by_text")],
+    "highlight": [("client", "get_by_text"), ("locator", "highlight_matches")],
     "get-recording": [("module", "get_recording")],
 }
 
@@ -74,8 +80,13 @@ class ConformanceTests(unittest.TestCase):
                 continue
             self.assertIn(command, MAPPING, f"cli command '{command}' has no SDK mapping")
             instance = TuiTest("conformance")
+            targets = {
+                "client": instance,
+                "module": tui_test,
+                "locator": instance.get_by_text("conformance"),
+            }
             for scope, attr in MAPPING[command]:
-                target = instance if scope == "client" else tui_test
+                target = targets[scope]
                 self.assertTrue(
                     hasattr(target, attr),
                     f"missing SDK member for '{command}': {scope}.{attr}",

@@ -149,17 +149,10 @@ pub(crate) fn operation(value: OperationResult) -> *mut TuiResult {
         OperationResult::ExitCode(v) => r.exit_code = integer(v),
         OperationResult::Cursor(v) => r.cursor = cursor(&mut s, v),
         OperationResult::Modes(v) => {
-            for (name, enabled) in v {
-                let name = s.string(name);
-                s.modes.push(TuiMode { name, enabled });
-            }
+            (r.modes, r.modes_len) = s.modes(v);
         }
         OperationResult::Colors(v) => {
-            for (index, color) in v.palette {
-                let key = s.string(index.to_string());
-                let value = s.string(color);
-                s.pairs.push(TuiPair { key, value });
-            }
+            r.colors = terminal_colors(&mut s, v);
         }
         OperationResult::Size(v) => r.size = size(&mut s, v),
         OperationResult::BellCount(v) => r.number = v,

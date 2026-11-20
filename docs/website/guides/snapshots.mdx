@@ -1,104 +1,44 @@
 ---
-title: Snapshot testing
-description: Compare terminal snapshots and update their baselines.
+title: Snapshots
+description: Capture, compare, and update terminal screen baselines with optional style and window title verification.
 editUrl: false
-sidebar:
-  order: 10
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-## Create a baseline
+Snapshot assertions compare the live terminal screen against a checked-in baseline file. Use snapshots to verify full-screen TUI layouts, tables, borders, and styling rules that would be tedious to check cell by cell.
+
+## Write and compare baselines
+
+Wait for a known UI state before calling `expectSnapshot`. On the first run, if no baseline file exists yet, `tui-test` writes it automatically so you can review and commit it to version control. Subsequent runs compare the current terminal against that file and fail with a diff if they diverge.
 
 <Tabs syncKey="example-language">
   <TabItem label="JavaScript">
-
     ```js
-    await terminal.getByText("Ready").expect();
-    await terminal.expectSnapshot("main-screen", {
-      update: false,
-      includeStyle: false,
-      includeTitle: false,
-    });
-    ```
-  </TabItem>
-  <TabItem label="Python">
-
-    ```python
-    await terminal.get_by_text("Ready").expect()
-    await terminal.expect_snapshot("main-screen", update=False, include_style=False, include_title=False)
-    ```
-  </TabItem>
-  <TabItem label="Rust">
-
-    ```rust
-    use tui_test::Operation;
-
-    terminal.get_by_text("Ready").expect()?;
-    terminal.execute(Operation::Snapshot {
-        name: "main-screen".into(),
-        update: false,
-        include_style: false,
-        include_title: false,
-        cwd: None,
-    })?;
-    ```
-  </TabItem>
-  <TabItem label="Go">
-
-    ```go
-    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
-        t.Fatal(err)
-    }
-    if _, err := terminal.ExpectSnapshot("main-screen", tuitest.SnapshotOptions{Update: false, IncludeStyle: false, IncludeTitle: false}); err != nil {
-        t.Fatal(err)
-    }
-    ```
-  </TabItem>
-  <TabItem label="CLI">
-
-    ```sh
-    tui-test expect text "Ready"
-    tui-test expect snapshot main-screen
-    ```
-  </TabItem>
-</Tabs>
-
-If the baseline does not exist, the assertion writes it. Review and commit the
-new file before relying on it in CI.
-
-## Compare terminal output
-
-Run the same assertion again to compare the current terminal with the baseline.
-Set the grid, backend, and relevant environment consistently. Wait for a known
-application state before capturing the snapshot.
-
-## Include styles and window titles
-
-<Tabs syncKey="example-language">
-  <TabItem label="JavaScript">
-
-    ```js
-    await terminal.expectSnapshot("main-screen", {
-      update: false,
+    await terminal.getByText("Dashboard").expect();
+    await terminal.expectSnapshot("dashboard-home", {
       includeStyle: true,
       includeTitle: true,
     });
     ```
   </TabItem>
   <TabItem label="Python">
-
     ```python
-    await terminal.expect_snapshot("main-screen", update=False, include_style=True, include_title=True)
+    await terminal.get_by_text("Dashboard").expect()
+    await terminal.expect_snapshot(
+        "dashboard-home",
+        include_style=True,
+        include_title=True,
+    )
     ```
   </TabItem>
   <TabItem label="Rust">
-
     ```rust
     use tui_test::Operation;
 
+    terminal.get_by_text("Dashboard").expect()?;
     terminal.execute(Operation::Snapshot {
-        name: "main-screen".into(),
+        name: "dashboard-home".into(),
         update: false,
         include_style: true,
         include_title: true,
@@ -107,96 +47,89 @@ application state before capturing the snapshot.
     ```
   </TabItem>
   <TabItem label="Go">
-
     ```go
-    if _, err := terminal.ExpectSnapshot("main-screen", tuitest.SnapshotOptions{Update: false, IncludeStyle: true, IncludeTitle: true}); err != nil {
+    if err := terminal.GetByText("Dashboard", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    _, err := terminal.ExpectSnapshot("dashboard-home", tuitest.SnapshotOptions{
+        IncludeStyle: true,
+        IncludeTitle: true,
+    })
+    if err != nil {
         t.Fatal(err)
     }
     ```
   </TabItem>
   <TabItem label="CLI">
-
     ```sh
-    tui-test expect snapshot main-screen --include-style --include-title
+    tui-test expect text "Dashboard"
+    tui-test expect snapshot dashboard-home --include-style --include-title
     ```
   </TabItem>
 </Tabs>
 
-Python uses `include_style` and `include_title`; JavaScript uses `includeStyle`
-and `includeTitle`. Go uses `SnapshotOptions`.
-Style snapshots include cell attributes, colors, underline styles, and
-hyperlink targets. Title inclusion records the full title.
+## Snapshot options
 
-## Normalize text with test helpers
-
-For comparisons in your own runner, JavaScript's `terminalSnapshot`, Python's
-`terminal_snapshot`, and Go's `tuitesttest.TerminalSnapshot` normalize text by
-removing trailing whitespace and blank lines.
-These helpers are separate from the native `.snap` baseline format.
-
-## Snapshot names and directories
-
-Snapshots are stored as `__snapshots__/NAME.snap` under the snapshot base
-directory. The CLI uses the client's working directory, not the daemon's.
-Spaces and filename-unsafe characters in names are replaced with hyphens.
-Go's snapshot options can select a working directory.
-
-## Review a mismatch
-
-A mismatch returns an assertion failure with expected and actual content.
-Use [failure diagnostics](/docs/tools/failure-diagnostics/) to inspect the
-screen and operation that produced it. A changed baseline should reflect an
-intentional application change.
-
-## Update a baseline
+| Option | CLI flag | Behavior |
+| --- | --- | --- |
+| `includeStyle` | `--include-style` | Captures foreground/background colors, underline attributes, and SGR flags alongside text. |
+| `includeTitle` | `--include-title` | Records and checks the terminal's window title in the snapshot. |
+| `cwd` | `--cwd DIR` | Overrides the root directory used to resolve snapshot baselines (defaults to the caller's working directory). |
+| `update` | `-u`, `--update` | Rewrites an existing baseline after an intentional UI change. Turn `update` back off before committing test code. |
 
 <Tabs syncKey="example-language">
   <TabItem label="JavaScript">
-
     ```js
-    await terminal.expectSnapshot("main-screen", {
+    await terminal.expectSnapshot("dashboard-home", {
       update: true,
       includeStyle: true,
-      includeTitle: true,
+      cwd: "tests/fixtures",
     });
     ```
   </TabItem>
   <TabItem label="Python">
-
     ```python
-    await terminal.expect_snapshot("main-screen", update=True, include_style=True, include_title=True)
+    await terminal.expect_snapshot(
+        "dashboard-home",
+        update=True,
+        include_style=True,
+        cwd="tests/fixtures",
+    )
     ```
   </TabItem>
   <TabItem label="Rust">
-
     ```rust
     use tui_test::Operation;
 
     terminal.execute(Operation::Snapshot {
-        name: "main-screen".into(),
+        name: "dashboard-home".into(),
         update: true,
         include_style: true,
-        include_title: true,
-        cwd: None,
+        include_title: false,
+        cwd: Some("tests/fixtures".into()),
     })?;
     ```
   </TabItem>
   <TabItem label="Go">
-
     ```go
-    if _, err := terminal.ExpectSnapshot("main-screen", tuitest.SnapshotOptions{Update: true, IncludeStyle: true, IncludeTitle: true}); err != nil {
+    _, err := terminal.ExpectSnapshot("dashboard-home", tuitest.SnapshotOptions{
+        Update:       true,
+        IncludeStyle: true,
+        Cwd:          "tests/fixtures",
+    })
+    if err != nil {
         t.Fatal(err)
     }
     ```
   </TabItem>
   <TabItem label="CLI">
-
     ```sh
-    tui-test expect snapshot main-screen -u --include-style --include-title
+    tui-test expect snapshot dashboard-home -u --include-style --cwd tests/fixtures
     ```
   </TabItem>
 </Tabs>
 
-Python and JavaScript accept `update=True` and `update: true`, respectively.
-Go returns `SnapshotPassed`, `SnapshotWritten`, or `SnapshotUpdated`.
-Enable updates only when reviewing a new baseline, not in ordinary CI runs.
+## Keep snapshots reproducible
+
+- Fix `cols`, `rows`, and `backend` in your launch options so terminal line wrapping and Unicode widths match across developer machines and CI runners.
+- Replace variable timestamps, PIDs, or temporary paths in your app's test fixtures, or normalize raw text strings with `terminalSnapshot` (JavaScript), `terminal_snapshot` (Python), or `tuitesttest.TerminalSnapshot` (Go) when comparing plain text with your test runner's own assertions.

@@ -13,6 +13,8 @@ pub fn execute(args: &TapeArgs, json: bool, matches: &ArgMatches) -> i32 {
         ("failure_artifact_mode", "--failure-artifact-mode"),
         ("failure_artifact_recording", "--failure-artifact-recording"),
         ("diagnostic_context", "--diagnostic-context"),
+        ("context_file", "--context-file"),
+        ("operation_name", "--operation-name"),
     ] {
         if matches.value_source(id) == Some(ValueSource::CommandLine) {
             return usage_error(

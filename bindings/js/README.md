@@ -1,10 +1,8 @@
 # @microsoft/tui-test
 
-Control, inspect, test, and record terminal apps from JavaScript or TypeScript.
-The engine runs in your process; the CLI is not required.
+Control, inspect, test, and record terminal apps from JavaScript or TypeScript. Sessions run the Rust engine in your process without requiring the `tui-test` CLI.
 
-Requires Node.js 20 or newer. Keep optional dependencies enabled so npm installs
-the native libraries. The package is ESM only.
+Requires Node.js 20 or newer. Keep optional dependencies enabled so npm installs the prebuilt native library for your platform. The package is ESM only.
 
 ```sh
 npm install @microsoft/tui-test
@@ -23,7 +21,4 @@ try {
 }
 ```
 
-See the [JavaScript and TypeScript API](https://tui-test.dev/docs/api/javascript/)
-for all methods, options, platform requirements, and source builds.
-Start with [writing tests](https://tui-test.dev/docs/getting-started/writing-tests/)
-or the [locator guide](https://tui-test.dev/docs/guides/locators/).
+See the [JavaScript and TypeScript API reference](https://tui-test.dev/docs/api/javascript/) for all methods, test helpers, recordings, and platform details, or start with [writing and running tests](https://tui-test.dev/docs/getting-started/testing/) and [locators](https://tui-test.dev/docs/guides/locators/). For local source builds, see [building from source](https://tui-test.dev/docs/contributing/#build-from-source).

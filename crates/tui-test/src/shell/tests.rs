@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -107,6 +108,7 @@ struct TestDirectory(PathBuf);
 
 impl TestDirectory {
     fn new(shell: Shell) -> Self {
+        static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
         let mut name = if shell == Shell::Zsh {
             "zsh-safe".to_string()
         } else {
@@ -127,7 +129,12 @@ impl TestDirectory {
             .unwrap()
             .join("target")
             .join("shell-tests")
-            .join(format!("{}-{}", shell.as_str(), std::process::id()))
+            .join(format!(
+                "{}-{}-{}",
+                shell.as_str(),
+                std::process::id(),
+                NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+            ))
             .join(name);
         std::fs::create_dir_all(&root).unwrap();
         Self(root)
@@ -169,6 +176,8 @@ impl TestShell {
                 .unwrap();
         }
         let launch = launch_with_scripts(shell, &scripts).unwrap();
+        #[cfg(windows)]
+        crate::terminal::conpty::initialize().unwrap();
         let pair = portable_pty::native_pty_system()
             .openpty(PtySize {
                 rows: 30,
@@ -387,6 +396,28 @@ fn normalized_path(path: &Path) -> String {
         path_str(path).replace('\\', "/")
     } else {
         path_str(path)
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn conpty_powershell_captures_output_through_the_last_character() {
+    let directory = TestDirectory::new(Shell::Powershell);
+    let mut session = TestShell::start(Shell::Powershell, &directory.0, &directory.0);
+    for frame in 0..3 {
+        session.run(
+            &format!(
+                "0..127 | ForEach-Object {{ [Console]::WriteLine(('frame-{frame}-{{0:D3}}' -f $_)) }}; \
+                 [Console]::Write('frame-{frame}-tail')"
+            ),
+            0,
+        );
+        let expected = (0..128)
+            .map(|line| format!("frame-{frame}-{line:03}"))
+            .chain(std::iter::once(format!("frame-{frame}-tail")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(session.tracker.last_output(), Some(expected.as_str()));
     }
 }
 

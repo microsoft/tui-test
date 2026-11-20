@@ -29,9 +29,18 @@ pub(crate) fn execute(
     operation_name: &'static str,
     operation: Operation,
 ) -> Result<OperationResult> {
+    let context = named_context(context, operation_name);
     global_registry()
         .session(name)
-        .execute_with_context(operation, context.with_operation(operation_name))
+        .execute_with_context(operation, context)
+}
+
+fn named_context(context: ExecutionContext, operation_name: &'static str) -> ExecutionContext {
+    if context.operation_name.is_some() {
+        context
+    } else {
+        context.with_operation(operation_name)
+    }
 }
 
 pub(crate) fn close(
@@ -45,16 +54,16 @@ pub(crate) fn close(
             || {
                 handle.execute_with_context(
                     Operation::FinishTrace { failed },
-                    context.clone().with_operation("trace.finish"),
+                    named_context(context.clone(), "trace.finish"),
                 )
             },
             || {
                 handle
-                    .execute_with_context(Operation::Close, context.clone().with_operation("close"))
+                    .execute_with_context(Operation::Close, named_context(context.clone(), "close"))
             },
         );
     }
-    handle.execute_with_context(Operation::Close, context.with_operation("close"))
+    handle.execute_with_context(Operation::Close, named_context(context, "close"))
 }
 
 pub(crate) fn recording(name: &str) -> Result<OperationResult> {

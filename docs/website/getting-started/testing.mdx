@@ -1,0 +1,243 @@
+---
+title: Writing and running tests
+description: Integrate tui-test with your language's test runner, run suites in parallel and CI, and keep terminal tests reliable.
+editUrl: false
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`tui-test` plugs into your language's existing test runner rather than introducing a custom runner. It provides terminal session helpers, retrying locators, and structured failure artifacts.
+
+## Write your first test
+
+Use the test helper for your language so each test gets an isolated session name and closes the child process even when an assertion fails.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    Save as `terminal.test.mjs` and run with `node --test terminal.test.mjs`:
+
+    ```js
+    import test from "node:test";
+    import { withTerminal } from "@microsoft/tui-test/test";
+
+    test("prints Ready and exits cleanly", async () => {
+      await withTerminal(
+        {
+          cols: 80,
+          rows: 24,
+          program: [process.execPath, "-e", "console.log('Ready')"],
+        },
+        async (terminal) => {
+          await terminal.getByText("Ready").expect();
+          await terminal.waitExit();
+          await terminal.expectExitCode(0);
+        },
+      );
+    });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    Save as `test_terminal.py` and run with `python -m unittest test_terminal`:
+
+    ```python
+    import sys
+    import unittest
+    from tui_test.testing import terminal
+
+    class TerminalTests(unittest.IsolatedAsyncioTestCase):
+        async def test_prints_ready(self):
+            async with terminal(
+                cols=80,
+                rows=24,
+                program=(sys.executable, "-c", "print('Ready')"),
+            ) as app:
+                await app.get_by_text("Ready").expect()
+                await app.wait_exit()
+                await app.expect_exit_code(0)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    Save as `tests/terminal.rs` and run with `cargo test`:
+
+    ```rust
+    use tui_test::{OpenOptions, Operation, Session};
+
+    #[test]
+    fn shell_prints_hello() -> Result<(), Box<dyn std::error::Error>> {
+        let terminal = Session::new("shell-prints-hello");
+        terminal.open(OpenOptions {
+            cols: 80,
+            rows: 24,
+            ..Default::default()
+        })?;
+        let result = (|| {
+            terminal.execute(Operation::Submit {
+                data: Some("echo hello".into()),
+            })?;
+            terminal.execute(Operation::WaitCommand { timeout_ms: None })?;
+            terminal.get_by_text("hello").last().expect()
+        })();
+        terminal.close()?;
+        result?;
+        Ok(())
+    }
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    Save as `terminal_test.go` in a Go module and run with `go test ./...`:
+
+    ```go
+    package terminal_test
+
+    import (
+        "testing"
+
+        "github.com/microsoft/tui-test/bindings/go"
+        "github.com/microsoft/tui-test/bindings/go/tuitesttest"
+    )
+
+    func TestShellPrintsHello(t *testing.T) {
+        t.Parallel()
+        terminal := tuitesttest.New(t, tuitesttest.Options{
+            Spawn: tuitest.SpawnOptions{
+                Cols: tuitest.Ptr(uint16(80)),
+                Rows: tuitest.Ptr(uint16(24)),
+            },
+        })
+        if err := terminal.Submit(tuitest.Ptr("echo hello")); err != nil {
+            t.Fatal(err)
+        }
+        if err := terminal.WaitCommand(tuitest.WaitOptions{}); err != nil {
+            t.Fatal(err)
+        }
+        if err := terminal.GetByText("hello", tuitest.TextSelectorOptions{}).
+            Last().Expect(tuitest.LocatorExpectOptions{}); err != nil {
+            t.Fatal(err)
+        }
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Filter to a single test
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    ```sh
+    node --test --test-name-pattern="prints Ready" terminal.test.mjs
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```sh
+    python -m unittest test_terminal.TerminalTests.test_prints_ready
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```sh
+    cargo test shell_prints_hello
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    ```sh
+    go test -run '^TestShellPrintsHello$' ./...
+    ```
+  </TabItem>
+</Tabs>
+
+## Parallel execution and cleanup
+
+Terminal sessions are keyed by name inside each process (or inside the CLI daemon). Sharing a session name across concurrent tests causes those tests to write into the same PTY and close each other's child process.
+
+- Use `withTerminal` (JavaScript), `terminal(...)` (Python), `tuitesttest.New` (Go), or `TuiTest.ephemeral()` so each test generates a unique session name.
+- In Rust, pass a distinct name per test to `Session::new`, or construct an unshared `Session` instance per test.
+- Avoid calling process-wide `closeAll()` / `close_all()` while parallel tests are still running.
+- Canceling a Python `asyncio.Task` or dropping a JavaScript promise does not abort an in-flight native operation. Always close sessions in `finally` blocks, context managers, or `t.Cleanup`, or call `interrupt()` first if a wait is blocked.
+
+## Keep terminal tests deterministic
+
+Terminal apps reflow text based on grid size, so pin `cols`, `rows`, `backend`, `cwd`, and relevant `env` variables at launch, especially when comparing [snapshots](/docs/guides/snapshots/) or screenshots.
+
+Synchronize on observable state rather than wall-clock delays. Fixed sleeps run slowly on developer machines and time out on busy CI runners. Wait for visible text (`locator.expect()`), the disappearance of spinners (`expect({ not: true })`), shell command completion (`waitCommand`), or process termination (`waitExit`). Reserve `waitIdle` for apps without explicit completion markers, since idle only indicates that output paused temporarily.
+
+When a shell echoes the command string or a layout repeats button labels like `Save` or `Delete`, scope your locator with `relativeTo`, `scope`, styles, or `.unique()` instead of relying on screen order. Finally, verify exit codes separately from screen text: seeing `"Done"` on screen does not guarantee exit code `0`, so pair `waitCommand` or `waitExit` with `expectExitCode(0)` when process status matters.
+
+## Run in CI and retain failure traces
+
+`tui-test` runs headlessly in Linux, macOS, and Windows CI environments without an X11, Wayland, or desktop session. Enable `on-failure` traces so CI uploads an interactive HTML report, Markdown summary, and asciinema recording whenever a test fails.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    ```js
+    import { setTerminalDefaults } from "@microsoft/tui-test/test";
+
+    setTerminalDefaults({
+      trace: { mode: "on-failure", directory: "artifacts/traces" },
+      artifacts: {
+        dir: "artifacts/failures",
+        onFailure: "all",
+        includeRecording: true,
+      },
+    });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    from tui_test.testing import set_terminal_defaults
+
+    set_terminal_defaults(
+        trace={"mode": "on-failure", "directory": "artifacts/traces"},
+        artifacts={
+            "dir": "artifacts/failures",
+            "on_failure": "all",
+            "include_recording": True,
+        },
+    )
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    use tui_test::{
+        ExecutionContext, FailureArtifactMode, FailureArtifactOptions, Session, TraceMode,
+        TraceOptions,
+    };
+
+    let context = ExecutionContext {
+        trace: Some(TraceOptions {
+            mode: TraceMode::OnFailure,
+            directory: "artifacts/traces".into(),
+        }),
+        artifact: Some(FailureArtifactOptions {
+            directory: "artifacts/failures".into(),
+            mode: FailureArtifactMode::All,
+            include_recording: true,
+        }),
+        ..Default::default()
+    };
+    let terminal = Session::new("ci-test").with_execution_context(context);
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    ```go
+    terminal := tuitesttest.New(t, tuitesttest.Options{
+        Client: tuitest.ClientOptions{
+            Trace: &tuitest.TraceOptions{
+                Mode:      tuitest.TraceOnFailure,
+                Directory: "artifacts/traces",
+            },
+            Artifacts: &tuitest.FailureArtifactOptions{
+                Dir:              "artifacts/failures",
+                OnFailure:        tuitest.ArtifactAll,
+                IncludeRecording: true,
+            },
+        },
+    })
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+    ```sh
+    tui-test --config ci.toml --failure-artifacts artifacts/failures run my-app
+    ```
+  </TabItem>
+</Tabs>
+
+Upload `artifacts/` as a workflow artifact on failure in your CI configuration. MP4 recordings additionally require `ffmpeg` on `PATH`; see [recordings](/docs/capture/recordings/) and [traces and diagnostics](/docs/capture/traces/).

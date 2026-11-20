@@ -98,6 +98,39 @@ type Profile struct {
 	Colors     Colors
 }
 
+type FontFamilies struct {
+	Family, Bold, Italic, BoldItalic *string
+	Files                            []string
+}
+type WindowStyle struct {
+	TitleBar, TrafficLights         *bool
+	Background, Foreground, Divider *string
+}
+type BorderStyle struct {
+	Width, Radius *float64
+	Color         *string
+}
+type ShadowStyle struct {
+	Enabled        *bool
+	Color          *string
+	Offset, Spread *float64
+}
+type RecordingCursorStyle struct {
+	Blink           *bool
+	BlinkIntervalMS *uint64
+}
+type Padding struct{ Uniform, Top, Right, Bottom, Left *uint32 }
+type RenderStyle struct {
+	Font                          FontFamilies
+	FontSize, TitleFontSize       *float64
+	CanvasBackground              *string
+	CanvasPadding, ContentPadding Padding
+	Window                        WindowStyle
+	Border                        BorderStyle
+	Shadow                        ShadowStyle
+	Cursor                        RecordingCursorStyle
+}
+
 type AutomaticRecording struct {
 	Mode      RecordingMode
 	Directory string
@@ -112,6 +145,9 @@ type TraceOptions struct {
 }
 
 type SpawnOptions struct {
+	Recording          *AutomaticRecording
+	Context            *ExecutionContext
+	Style              *RenderStyle
 	Backend            Backend
 	Cols, Rows         *uint16
 	Cwd                string
@@ -121,10 +157,22 @@ type SpawnOptions struct {
 	Timeouts           Timeouts
 }
 type SessionOptions struct {
+	Context            *ExecutionContext
 	Recording          *AutomaticRecording
 	Artifacts          *ArtifactOptions
 	Trace              *TraceOptions
 	ScreenHistoryLimit *uint16
+}
+
+type ExecutionContext struct {
+	OperationName            *string            `json:"operation_name,omitempty"`
+	DiagnosticContext        *map[string]string `json:"diagnostic_context,omitempty"`
+	ArtifactDirectory        *string            `json:"artifact_directory,omitempty"`
+	ArtifactMode             *string            `json:"artifact_mode,omitempty"`
+	ArtifactIncludeRecording *bool              `json:"artifact_include_recording,omitempty"`
+	TraceMode                *string            `json:"trace_mode,omitempty"`
+	TraceDirectory           *string            `json:"trace_directory,omitempty"`
+	ScreenHistoryLimit       *uint16            `json:"screen_history_limit,omitempty"`
 }
 
 type OpenOptions struct {
@@ -132,9 +180,25 @@ type OpenOptions struct {
 	Shell Shell
 }
 
+type PackedScreen struct {
+	Cols, Rows uint16
+	UTF8       []byte
+}
+
 type TitleOptions struct {
 	Regex, Not bool
 	Timeout    *time.Duration
+}
+type CursorExpectation struct {
+	X, Y    *uint16
+	Visible *bool
+	Shape   *string
+	Timeout *time.Duration
+}
+type ColorExpectation struct {
+	Foreground, Background, Cursor *string
+	Palette                        map[uint8]string
+	Timeout                        *time.Duration
 }
 
 type ClipboardWaitOptions struct {
@@ -293,6 +357,8 @@ func (failure *Error) Error() string          { return failure.Message }
 func pointerTo[Value any](value Value) *Value { return &value }
 
 type LocatorNode struct {
+	Scope      *TextScope  `json:"scope,omitempty"`
+	MatchStyle *TextStyle  `json:"match_style,omitempty"`
 	Kind       string      `json:"kind"`
 	Text       *string     `json:"text,omitempty"`
 	Regex      *bool       `json:"regex,omitempty"`
@@ -308,6 +374,15 @@ type LocatorNode struct {
 	Has        *uint32     `json:"has,omitempty"`
 	HasNot     *uint32     `json:"has_not,omitempty"`
 	Occurrence any         `json:"occurrence"`
+}
+type TextAnchor struct {
+	Text       string `json:"text"`
+	Regex      bool   `json:"regex"`
+	Occurrence any    `json:"occurrence"`
+}
+type TextScope struct {
+	After  *TextAnchor `json:"after,omitempty"`
+	Before *TextAnchor `json:"before,omitempty"`
 }
 type LocatorExpression struct {
 	Nodes []LocatorNode `json:"nodes"`

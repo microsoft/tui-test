@@ -1,162 +1,127 @@
 ---
-title: Assertions
-description: Check terminal content, terminal state, and process results.
+title: Waiting and assertions
+description: Synchronize tests with retrying locator assertions, lifecycle waits, and native cursor, mode, color, title, clipboard, and bell checks.
 editUrl: false
-sidebar:
-  order: 5
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-## Text and style assertions
+Terminal output arrives asynchronously over the PTY. Rather than sleeping for fixed intervals, synchronize on the exact screen state or process event your test requires.
+
+## Choose the right wait or assertion
+
+| Goal | Operation | Default timeout class |
+| --- | --- | --- |
+| Text, style, or link appears or disappears | `locator.expect()` / `locator.wait()` (`expect text`, `wait text`) | `text` (5000 ms) |
+| Shell prompt ready after `open` | `waitReady` (`wait ready`) | `ready` (30000 ms) |
+| Submitted shell command finishes | `waitCommand` + `expectOutput` / `expectExitCode` | `command` (30000 ms) |
+| Directly launched program exits | `waitExit` + `expectExitCode` | `exit` (30000 ms) |
+| Cursor, terminal mode, or color changes | `expectCursor`, `expectMode`, `expectColors` | `text` (5000 ms) |
+| Window title, OSC 52 clipboard, or bell | `expectTitle` / `waitTitle`, `waitClipboard`, `expectBellCount` / `waitBell` | `text` (5000 ms) |
+| Screen stops changing | `waitIdle` (`wait idle`) | `idle` (5000 ms) |
+
+`waitIdle` only confirms that no new visual changes arrived during the quiet window; it does not prove a command succeeded or finished rendering. Prefer locator assertions, `waitCommand`, or `waitExit` whenever possible.
+
+## Visible and absent text
+
+`locator.expect()` retries until at least one selected match is visible. Pass `not: true` (`not_=True` in Python, `--not` on the CLI) or `wait_hidden` in Rust to wait until transient UI like a loading indicator disappears.
 
 <Tabs syncKey="example-language">
   <TabItem label="JavaScript">
-
     ```js
+    await terminal.getByText("Loading...").expect({ not: true, timeout: 10_000 });
     await terminal
       .getByText("Ready")
-      .getByStyle({ foreground: "green", bold: true })
-      .expect();
-    await terminal
-      .getByText("Settings")
-      .getByText("Save", { direction: "after" })
-      .unique()
+      .withStyle({ foreground: "green" })
       .expect();
     ```
   </TabItem>
   <TabItem label="Python">
-
     ```python
     from tui_test import TextStyle
 
-    await terminal.get_by_text("Ready").get_by_style(TextStyle(foreground="green", bold=True)).expect()
-    await terminal.get_by_text("Settings").get_by_text("Save", direction="after").unique().expect()
+    await terminal.get_by_text("Loading...").expect(not_=True, timeout=10_000)
+    await (
+        terminal.get_by_text("Ready")
+        .with_style(TextStyle(foreground="green"))
+        .expect()
+    )
     ```
   </TabItem>
   <TabItem label="Rust">
-
     ```rust
-    use tui_test::{LocatorDirection, TextStyle};
+    use tui_test::{LocatorExpectOptions, TextStyle};
 
+    terminal
+        .get_by_text("Loading...")
+        .expect_with(LocatorExpectOptions {
+            not: true,
+            timeout_ms: Some(10_000),
+        })?;
     terminal
         .get_by_text("Ready")
         .get_by_style(TextStyle {
             foreground: Some("green".into()),
-            bold: Some(true),
             ..Default::default()
         })
         .expect()?;
-    terminal
-        .get_by_text("Settings")
-        .get_by_text_relative("Save", LocatorDirection::After)
-        .unique()
-        .expect()?;
     ```
   </TabItem>
   <TabItem label="Go">
-
     ```go
-    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).GetByStyle(tuitest.TextStyle{Foreground: tuitest.Ptr("green"), Bold: tuitest.Ptr(true)}, tuitest.StyleSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+    timeout := 10 * time.Second
+    err := terminal.GetByText("Loading...", tuitest.TextSelectorOptions{}).
+        Expect(tuitest.LocatorExpectOptions{Not: true, Timeout: &timeout})
+    if err != nil {
         t.Fatal(err)
     }
-    if err := terminal.GetByText("Settings", tuitest.TextSelectorOptions{}).GetByText("Save", tuitest.TextSelectorOptions{Direction: tuitest.After}).Unique().Expect(tuitest.LocatorExpectOptions{}); err != nil {
+    err = terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).
+        WithStyle(tuitest.TextStyle{Foreground: tuitest.Ptr("green")}).
+        Expect(tuitest.LocatorExpectOptions{})
+    if err != nil {
         t.Fatal(err)
     }
     ```
   </TabItem>
   <TabItem label="CLI">
-
     ```sh
-    tui-test expect text "Ready" --fg green --bold
-    tui-test expect text "Save" --after-text "Settings" --match unique
+    tui-test expect text "Loading..." --not --timeout 10000
+    tui-test expect text "Ready" --fg green
     ```
   </TabItem>
 </Tabs>
-
-Text assertions use [locators](/docs/guides/locators/) and retry against the
-current screen. Combine text with style or hyperlink constraints when the
-visual state matters.
-
-## Negative assertions
-
-<Tabs syncKey="example-language">
-  <TabItem label="JavaScript">
-
-    ```js
-    await terminal.getByText("Loading").expect({ not: true });
-    ```
-  </TabItem>
-  <TabItem label="Python">
-
-    ```python
-    await terminal.get_by_text("Loading").expect(not_=True)
-    ```
-  </TabItem>
-  <TabItem label="Rust">
-
-    ```rust
-    use tui_test::LocatorExpectOptions;
-
-    terminal
-        .get_by_text("Loading")
-        .expect_with(LocatorExpectOptions {
-            not: true,
-            ..Default::default()
-        })?;
-    ```
-  </TabItem>
-  <TabItem label="Go">
-
-    ```go
-    if err := terminal.GetByText("Loading", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{Not: true}); err != nil {
-        t.Fatal(err)
-    }
-    ```
-  </TabItem>
-  <TabItem label="CLI">
-
-    ```sh
-    tui-test expect text "Loading" --not
-    ```
-  </TabItem>
-</Tabs>
-
-In JavaScript use `expect({ not: true })`; in Python use
-`expect(not_=True)`. Negative expectations wait until the locator is absent.
 
 ## Command output and exit codes
 
+In shell sessions (`open`), call `waitCommand` after `submit` before asserting `expectOutput` or `expectExitCode`. `expectOutput` checks the captured output of the last completed shell command (excluding the shell prompt itself) and accepts `regex: true` (`--regex`). In direct program sessions (`run`), call `waitExit` and `expectExitCode`.
+
 <Tabs syncKey="example-language">
   <TabItem label="JavaScript">
-
     ```js
-    await terminal.submit("echo complete");
+    await terminal.submit("printf 'build ok\\n'");
     await terminal.waitCommand();
-    await terminal.expectOutput("complete");
+    await terminal.expectOutput("build ok");
     await terminal.expectExitCode(0);
     ```
   </TabItem>
   <TabItem label="Python">
-
     ```python
-    await terminal.submit("echo complete")
+    await terminal.submit("printf 'build ok\\n'")
     await terminal.wait_command()
-    await terminal.expect_output("complete")
+    await terminal.expect_output("build ok")
     await terminal.expect_exit_code(0)
     ```
   </TabItem>
   <TabItem label="Rust">
-
     ```rust
     use tui_test::Operation;
 
     terminal.execute(Operation::Submit {
-        data: Some("echo complete".into()),
+        data: Some("printf 'build ok\\n'".into()),
     })?;
     terminal.execute(Operation::WaitCommand { timeout_ms: None })?;
     terminal.execute(Operation::ExpectOutput {
-        text: "complete".into(),
+        text: "build ok".into(),
         regex: false,
     })?;
     terminal.execute(Operation::ExpectExitCode {
@@ -166,15 +131,14 @@ In JavaScript use `expect({ not: true })`; in Python use
     ```
   </TabItem>
   <TabItem label="Go">
-
     ```go
-    if err := terminal.Submit(tuitest.Ptr("echo complete")); err != nil {
+    if err := terminal.Submit(tuitest.Ptr("printf 'build ok\\n'")); err != nil {
         t.Fatal(err)
     }
     if err := terminal.WaitCommand(tuitest.WaitOptions{}); err != nil {
         t.Fatal(err)
     }
-    if err := terminal.ExpectOutput("complete", tuitest.OutputOptions{}); err != nil {
+    if err := terminal.ExpectOutput("build ok", tuitest.OutputOptions{}); err != nil {
         t.Fatal(err)
     }
     if err := terminal.ExpectExitCode(0, tuitest.WaitOptions{}); err != nil {
@@ -183,127 +147,103 @@ In JavaScript use `expect({ not: true })`; in Python use
     ```
   </TabItem>
   <TabItem label="CLI">
-
     ```sh
-    tui-test submit "echo complete"
+    tui-test submit "printf 'build ok\n'"
     tui-test wait command
-    tui-test expect output "complete"
+    tui-test expect output "build ok"
     tui-test expect exit-code 0
     ```
   </TabItem>
 </Tabs>
 
-`expect output` checks tracked command output and accepts `--regex`.
-It is separate from a visible-text assertion. Wait for the command first.
-For a directly launched program, wait for process exit before checking its code.
+## Native cursor, mode, and color assertions
 
-## Window title
-
-`expect title TEXT` accepts `--regex`, `--not`, and `--timeout MS`.
-Use it when the application reports state through the terminal title.
-
-## Cursor properties
-
-These property-specific CLI assertions retry. In the high-level bindings, read
-the cursor with `getCursor`, `get_cursor`, or `GetCursor` and use your test
-runner's assertions.
-
-```sh
-tui-test expect cursor --hidden
-tui-test expect cursor --visible --shape bar
-tui-test expect cursor --x 4 --y 0
-```
-
-Only the named properties are checked. Cursor coordinates are terminal cells.
-Read `get cursor --json` for position, visibility, shape, and color.
-
-## Terminal modes and colors
-
-These examples use CLI assertion commands. The language bindings expose modes
-and colors through session state.
-
-```sh
-tui-test expect mode alternate_screen
-tui-test expect mode bracketed_paste --off
-tui-test expect colors --background '#1d1f21'
-tui-test expect colors --foreground 7 --cursor '#ff0000'
-tui-test expect colors --palette '1=#00ff00' --palette '200=#123456'
-```
-
-Color assertions accept hex RGB, `r,g,b`, or an ANSI palette index.
-They check the named slots together; repeat `--palette` for multiple entries.
-`default` is not accepted. Use [terminal state](/docs/guides/terminal-state/)
-to inspect modes and effective colors.
-
-## Bell counts
-
-`expect bell COUNT` waits until the cumulative bell count reaches `COUNT`.
-The language methods are `expectBellCount`, `expect_bell_count`, and
-`ExpectBellCount`.
-
-## Snapshot assertions
+Poll terminal emulator state directly in Rust without manual loops when testing TUI chrome, alternate-screen transitions, raw input modes, or dynamic OSC 4/10/11/12 color changes. `expectCursor` checks any combination of zero-based `x`, `y`, `visible`, and cursor `shape` (`"block"`, `"underline"`, `"bar"`). `expectMode` checks boolean terminal modes such as `"alternate_screen"`, `"bracketed_paste"`, `"focus_events"`, `"application_cursor"`, or mouse reporting modes. `expectColors` checks foreground, background, cursor color, or indexed palette entries.
 
 <Tabs syncKey="example-language">
   <TabItem label="JavaScript">
-
     ```js
-    await terminal.expectSnapshot("main-screen", {
-      update: false,
-      includeStyle: true,
-      includeTitle: true,
+    await terminal.expectMode("alternate_screen", true);
+    await terminal.expectCursor({ x: 4, y: 2, visible: true, shape: "bar" });
+    await terminal.expectColors({
+      foreground: "#e6edf3",
+      palette: [[1, "#ff6b6b"]],
     });
     ```
   </TabItem>
   <TabItem label="Python">
-
     ```python
-    await terminal.expect_snapshot("main-screen", update=False, include_style=True, include_title=True)
+    await terminal.expect_mode("alternate_screen", True)
+    await terminal.expect_cursor(x=4, y=2, visible=True, shape="bar")
+    await terminal.expect_colors(
+        foreground="#e6edf3",
+        palette={1: "#ff6b6b"},
+    )
     ```
   </TabItem>
   <TabItem label="Rust">
-
     ```rust
-    use tui_test::Operation;
+    use tui_test::terminal::emu::CursorShape;
+    use tui_test::{ColorExpectation, CursorExpectation, Operation};
 
-    terminal.execute(Operation::Snapshot {
-        name: "main-screen".into(),
-        update: false,
-        include_style: true,
-        include_title: true,
-        cwd: None,
+    terminal.execute(Operation::ExpectMode {
+        mode: "alternate_screen".into(),
+        enabled: true,
+        timeout_ms: None,
+    })?;
+    terminal.execute(Operation::ExpectCursor {
+        expectation: CursorExpectation {
+            x: Some(4),
+            y: Some(2),
+            visible: Some(true),
+            shape: Some(CursorShape::Bar),
+        },
+        timeout_ms: None,
+    })?;
+    terminal.execute(Operation::ExpectColors {
+        expectation: ColorExpectation {
+            foreground: Some("#e6edf3".into()),
+            palette: vec![(1, "#ff6b6b".into())],
+            ..Default::default()
+        },
+        timeout_ms: None,
     })?;
     ```
   </TabItem>
   <TabItem label="Go">
-
     ```go
-    if _, err := terminal.ExpectSnapshot("main-screen", tuitest.SnapshotOptions{Update: false, IncludeStyle: true, IncludeTitle: true}); err != nil {
+    if err := terminal.ExpectMode("alternate_screen", true, tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    err := terminal.ExpectCursor(tuitest.CursorExpectation{
+        X:       tuitest.Ptr(uint16(4)),
+        Y:       tuitest.Ptr(uint16(2)),
+        Visible: tuitest.Ptr(true),
+        Shape:   tuitest.CursorBar,
+    }, tuitest.WaitOptions{})
+    if err != nil {
+        t.Fatal(err)
+    }
+    err = terminal.ExpectColors(tuitest.ColorExpectation{
+        Foreground: tuitest.Ptr("#e6edf3"),
+        Palette:    map[uint8]string{1: "#ff6b6b"},
+    }, tuitest.WaitOptions{})
+    if err != nil {
         t.Fatal(err)
     }
     ```
   </TabItem>
   <TabItem label="CLI">
-
     ```sh
-    tui-test expect snapshot main-screen --include-style --include-title
+    tui-test expect mode alternate_screen
+    tui-test expect cursor --x 4 --y 2 --visible true --shape bar
+    tui-test expect colors --fg "#e6edf3" --palette 1=#ff6b6b
     ```
   </TabItem>
 </Tabs>
 
-Snapshots compare terminal output with an on-disk baseline.
-See [snapshot testing](/docs/guides/snapshots/) for baseline creation and updates.
+## Titles, clipboard, and bells
 
-## Assertion timeouts
+`expectTitle` and `waitTitle` match OSC 0 / OSC 2 window titles, with optional `regex` and `not` flags. `waitClipboard()` waits for the next OSC 52 clipboard update, or accepts a string or regular expression to wait until the clipboard matches specific content. `waitBell()` waits for the next `BEL` (`\x07`) event, while `expectBellCount(count)` waits until the cumulative session bell count reaches `count`.
 
-Locator assertions use the text timeout, five seconds by default.
-Override an individual wait with `--timeout MS` or the language's timeout
-option. A screen-idle wait is not a substitute for checking the state that
-matters to the test.
-
-## Assertion failures
-
-CLI assertion and wait failures exit with code `1`. Language APIs raise or
-return typed errors with structured failure details when available.
-Configure [failure artifacts](/docs/tools/failure-diagnostics/) or
-[traces](/docs/tools/trace-viewer/) before the test to retain screen,
-locator, process, and timeline evidence.
+When any assertion times out, `tui-test` attaches structured failure details (and optional exported artifacts) directly to the returned error; see [traces and diagnostics](/docs/capture/traces/).

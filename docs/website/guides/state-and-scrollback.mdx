@@ -1,0 +1,182 @@
+---
+title: Terminal state and scrollback
+description: Read visible text, untrimmed packed screens, cell styles, terminal metadata, and navigate native scrollback history.
+editUrl: false
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`tui-test` lets you read the full terminal state at any point in a session, from plain text down to individual cell attributes, OSC 8 links, terminal modes, and retained scrollback rows.
+
+## Read screen text, packed bytes, and cells
+
+`text` returns the currently selected viewport (`full: false`, default) or all retained scrollback plus the live screen (`full: true`), trimming trailing spaces on each line. `packedScreen` returns exact terminal dimensions (`cols`, `rows`) alongside untrimmed UTF-8 rows separated by `\n`, preserving trailing spaces and blank rows (note that UTF-8 byte offsets differ from cell columns when wide or multibyte characters are present).
+
+`cells(x, y, w, h)` reads a rectangular region in zero-based cell coordinates, including resolved colors, underline style and color, attribute flags, and OSC 8 link URI/ID metadata. `state` returns a single snapshot combining visible text, grid size, cursor, command status, exit code, terminal modes, mouse modes, colors, timeouts, readiness, and bell count.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    ```js
+    const state = await terminal.state();
+    const visible = await terminal.text();
+    const fullHistory = await terminal.text({ full: true });
+    const packed = await terminal.packedScreen();
+    const headerCells = await terminal.cells(0, 0, 40, 1);
+    console.log(state.size, visible.length, fullHistory.length, packed.cols, headerCells.length);
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    state = await terminal.state()
+    visible = await terminal.text()
+    full_history = await terminal.text(full=True)
+    packed = await terminal.packed_screen()
+    header_cells = await terminal.cells(0, 0, 40, 1)
+    print(state["size"], len(visible), len(full_history), packed["cols"], len(header_cells))
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    use tui_test::Operation;
+
+    let state = terminal.execute(Operation::State)?;
+    let visible = terminal.execute(Operation::Text { full: false })?;
+    let full_history = terminal.execute(Operation::Text { full: true })?;
+    let packed = terminal.execute(Operation::PackedScreen { full: false })?;
+    let header_cells = terminal.execute(Operation::Cells {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 1,
+    })?;
+    println!("{state:?} {visible:?} {full_history:?} {packed:?} {header_cells:?}");
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    ```go
+    state, err := terminal.State()
+    if err != nil {
+        t.Fatal(err)
+    }
+    visible, err := terminal.Text(tuitest.TextOptions{})
+    if err != nil {
+        t.Fatal(err)
+    }
+    packed, err := terminal.PackedScreen(tuitest.TextOptions{})
+    if err != nil {
+        t.Fatal(err)
+    }
+    headerCells, err := terminal.Cells(0, 0, 40, 1)
+    if err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(state.Size, len(visible), packed.Cols, len(headerCells))
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+    ```sh
+    tui-test state --json
+    tui-test text
+    tui-test text --full
+    tui-test packed-screen --json
+    tui-test cells 0 0 40 1 --json
+    ```
+  </TabItem>
+</Tabs>
+
+## Individual state getters
+
+When you only need one property, query it directly instead of fetching the full screen:
+
+| Property | CLI `get` field | JavaScript | Python | Go |
+| --- | --- | --- | --- | --- |
+| Last shell command | `command` | `getCommand()` | `get_command()` | `GetCommand()` |
+| Last command output | `output` | `getOutput()` | `get_output()` | `GetOutput()` |
+| Last exit code | `exit-code` | `getExitCode()` | `get_exit_code()` | `GetExitCode()` |
+| Working directory | `cwd` | `getCwd()` | `get_cwd()` | `GetCwd()` |
+| Cursor position & style | `cursor` | `getCursor()` | `get_cursor()` | `GetCursor()` |
+| Terminal modes | `modes` | `getModes()` | `get_modes()` | `GetModes()` |
+| Default & palette colors | `colors` | `getColors()` | `get_colors()` | `GetColors()` |
+| Grid dimensions | `size` | `getSize()` | `get_size()` | `GetSize()` |
+| Scrollback viewport | `viewport` | `getViewport()` | `get_viewport()` | `GetViewport()` |
+| Window title | `title` | `getTitle()` | `get_title()` | `GetTitle()` |
+| OSC 52 clipboard | `clipboard` | `getClipboard()` | `get_clipboard()` | `GetClipboard()` |
+| Bell count & events | `bells`, `bell-events` | `getBellCount()`, `getBellEvents()` | `get_bell_count()`, `get_bell_events()` | `GetBellCount()`, `GetBellEvents()` |
+
+## Navigate native scrollback history
+
+Each session retains up to `profile.scrollback` rows above the live screen (10,000 rows by default). Native scrollback moves the emulator's inspection viewport without sending keystrokes or mouse wheel events to the child application.
+
+- Positive line counts in `scroll(lines)` (`tui-test scroll up LINES`) move upward into older output; negative values (`tui-test scroll down LINES`) move back toward the live screen.
+- `scrollToTop` (`scroll top`) jumps to the oldest retained row; `scrollToBottom` (`scroll bottom`) returns to the live screen (`offset == 0`).
+- `getViewport` (`get viewport --json`) reports `{ offset, history }` in rows, where `offset` is how many rows above the live screen the viewport sits and `history` is total available scrollback rows.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    ```js
+    await terminal.scroll(10);
+    const viewport = await terminal.getViewport();
+    const olderScreen = await terminal.text();
+    await terminal.scrollToBottom();
+    console.log(viewport, olderScreen);
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    await terminal.scroll(10)
+    viewport = await terminal.get_viewport()
+    older_screen = await terminal.text()
+    await terminal.scroll_to_bottom()
+    print(viewport, older_screen)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    use tui_test::{Operation, ScrollTarget};
+
+    terminal.execute(Operation::Scroll {
+        target: ScrollTarget::Lines(10),
+    })?;
+    let viewport = terminal.execute(Operation::GetViewport)?;
+    let older_screen = terminal.execute(Operation::Text { full: false })?;
+    terminal.execute(Operation::Scroll {
+        target: ScrollTarget::Bottom,
+    })?;
+    println!("{viewport:?} {older_screen:?}");
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    ```go
+    if err := terminal.Scroll(10); err != nil {
+        t.Fatal(err)
+    }
+    viewport, err := terminal.GetViewport()
+    if err != nil {
+        t.Fatal(err)
+    }
+    olderScreen, err := terminal.Text(tuitest.TextOptions{})
+    if err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.ScrollToBottom(); err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(viewport, olderScreen)
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+    ```sh
+    tui-test scroll up 10
+    tui-test get viewport --json
+    tui-test text
+    tui-test scroll bottom
+    ```
+  </TabItem>
+</Tabs>
+
+### How the history viewport interacts with other APIs
+
+- Visible `text()`, visible locators, screenshots, raster recordings, and the live monitor all reflect the active scrollback viewport.
+- `text({ full: true })` and `packedScreen({ full: true })` always read all retained scrollback plus the live screen regardless of `offset`.
+- Incoming child output keeps your historical view pinned until those rows roll off the configured scrollback limit.
+- Sending keyboard input automatically snaps the viewport back to the live screen. Sending mouse input or clicking a locator while `offset > 0` fails with a usage error; call `scrollToBottom` before clicking.

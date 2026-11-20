@@ -1,64 +1,73 @@
 ---
-title: Sessions
-description: Create, reuse, restart, and close terminal sessions.
+title: Sessions and backends
+description: Launch shells or executables, manage named and ephemeral sessions, restart or interrupt processes, and pick a terminal backend.
 editUrl: false
-sidebar:
-  order: 1
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-## Shell sessions and direct program launches
+Every interaction in `tui-test` runs inside a terminal session backed by a real PTY and a terminal emulator grid. Creating a client or `Session` object does not spawn a child process on its own; call `open` or `run` to start one.
 
-Use `open` when you need a shell, prompt readiness, and shell-command tracking.
-Use `run` to launch a program directly.
+## Shell sessions vs. direct launches
+
+Choose `open` when you want an interactive shell, prompt detection, and command tracking (`submit`, `waitCommand`, `getOutput`, `getExitCode`, `getCwd`). Choose `run` when testing an application directly without shell quoting or profile startup scripts.
 
 <Tabs syncKey="example-language">
   <TabItem label="JavaScript">
-
     ```js
-    await terminal.open({ shell: "bash" });
-    await terminal.submit("echo hello");
+    // Shell session
+    await terminal.open({ shell: "bash", cols: 100, rows: 30, cwd: "." });
+    await terminal.submit("echo ready");
     await terminal.waitCommand();
     await terminal.close();
-    await terminal.run("my-app", [], { backend: "alacritty" });
+
+    // Direct application launch
+    await terminal.run("my-app", ["--port", "8080"], {
+      env: { NO_COLOR: "0" },
+    });
     await terminal.waitExit();
     ```
   </TabItem>
   <TabItem label="Python">
-
     ```python
-    await terminal.open(shell="bash")
-    await terminal.submit("echo hello")
+    # Shell session
+    await terminal.open(shell="bash", cols=100, rows=30, cwd=".")
+    await terminal.submit("echo ready")
     await terminal.wait_command()
     await terminal.close()
-    await terminal.run("my-app", backend="alacritty")
+
+    # Direct application launch
+    await terminal.run("my-app", "--port", "8080", env={"NO_COLOR": "0"})
     await terminal.wait_exit()
     ```
   </TabItem>
   <TabItem label="Rust">
-
     ```rust
-    use tui_test::{OpenOptions, Operation, RunOptions};
+    use tui_test::shell::Shell;
+    use tui_test::{Backend, OpenOptions, Operation, RunOptions};
 
     terminal.open(OpenOptions {
-        shell: Some(tui_test::shell::Shell::Bash),
+        shell: Some(Shell::Bash),
+        cols: 100,
+        rows: 30,
+        cwd: Some(".".into()),
         ..Default::default()
     })?;
     terminal.execute(Operation::Submit {
-        data: Some("echo hello".into()),
+        data: Some("echo ready".into()),
     })?;
     terminal.execute(Operation::WaitCommand { timeout_ms: None })?;
     terminal.close()?;
+
     terminal.run(RunOptions {
         program: "my-app".into(),
-        args: vec![],
-        backend: tui_test::terminal::backend::Backend::Alacritty,
+        args: vec!["--port".into(), "8080".into()],
+        backend: Backend::Alacritty,
         profile: Default::default(),
         cols: 80,
         rows: 30,
         cwd: None,
-        env: vec![],
+        env: vec![("NO_COLOR".into(), "0".into())],
         wait_ready: None,
         restart: false,
         timeouts: Default::default(),
@@ -69,12 +78,19 @@ Use `run` to launch a program directly.
     ```
   </TabItem>
   <TabItem label="Go">
-
     ```go
-    if _, err := terminal.Open(tuitest.OpenOptions{Shell: tuitest.Bash, SpawnOptions: tuitest.SpawnOptions{}}); err != nil {
+    _, err := terminal.Open(tuitest.OpenOptions{
+        Shell: tuitest.Bash,
+        SpawnOptions: tuitest.SpawnOptions{
+            Cols: tuitest.Ptr(uint16(100)),
+            Rows: tuitest.Ptr(uint16(30)),
+            Cwd:  ".",
+        },
+    })
+    if err != nil {
         t.Fatal(err)
     }
-    if err := terminal.Submit(tuitest.Ptr("echo hello")); err != nil {
+    if err := terminal.Submit(tuitest.Ptr("echo ready")); err != nil {
         t.Fatal(err)
     }
     if err := terminal.WaitCommand(tuitest.WaitOptions{}); err != nil {
@@ -83,7 +99,11 @@ Use `run` to launch a program directly.
     if err := terminal.Close(); err != nil {
         t.Fatal(err)
     }
-    if _, err := terminal.Run("my-app", nil, tuitest.SpawnOptions{Backend: tuitest.Alacritty}); err != nil {
+
+    _, err = terminal.Run("my-app", []string{"--port", "8080"}, tuitest.SpawnOptions{
+        Env: map[string]string{"NO_COLOR": "0"},
+    })
+    if err != nil {
         t.Fatal(err)
     }
     if err := terminal.WaitExit(tuitest.WaitOptions{}); err != nil {
@@ -92,172 +112,101 @@ Use `run` to launch a program directly.
     ```
   </TabItem>
   <TabItem label="CLI">
-
     ```sh
-    tui-test --session shell open --shell bash
-    tui-test --session shell submit "echo hello"
+    tui-test --session shell open --shell bash --cols 100 --rows 30 --cwd .
+    tui-test --session shell submit "echo ready"
     tui-test --session shell wait command
     tui-test --session shell close
 
-    tui-test --session app run my-app
+    tui-test --session app run --env NO_COLOR=0 my-app --port 8080
     tui-test --session app wait exit
+    tui-test --session app close
     ```
   </TabItem>
 </Tabs>
 
-In the language APIs, the corresponding methods are `open` and `run`
-(`Open` and `Run` in Go). Client construction does not start a terminal.
+The default terminal size is 80 columns by 30 rows. Supported shells for `open` are `bash`, `zsh`, `fish`, `powershell`, `pwsh`, `cmd`, `xonsh`, `elvish`, and `nushell`. Shell integration injects prompt and command markers so `wait ready` and `wait command` observe real shell boundaries; pass `waitReady: false` (`--no-wait-ready`) to skip initial prompt waiting.
 
-## Named and ephemeral sessions
+## Session names and isolation
 
-CLI commands select `--session NAME`, then `TUI_TEST_SESSION`, then `default`.
-The Python, JavaScript, and Go clients use the same environment fallback when
-you omit a name. Clients with the same name share a session in their process.
-Closing that session affects every client that uses it.
+CLI commands resolve the target session from `--session NAME`, then `TUI_TEST_SESSION`, and finally `default`. Each named CLI session runs in a per-session background daemon so separate shell invocations can drive the same terminal.
 
-Use `TuiTest.ephemeral()` in Python or JavaScript, or `tuitest.Ephemeral` in Go,
-for an automatically generated unique name.
+JavaScript, Python, and Go clients use the same fallback order when a session name is omitted, but keep sessions inside the current process rather than sharing them with CLI daemons. Multiple client instances with the same name in one process share the underlying session. For isolated tests, generate a unique name with `TuiTest.ephemeral()`, `tuitest.Ephemeral()`, or the language test helpers.
 
-## CLI sessions and in-process library sessions
+## Reuse, restart, and interrupt
 
-The CLI uses a daemon so separate commands can control one terminal.
-Library sessions live in the caller's process and do not require a daemon or
-the CLI. A CLI command cannot control a Python, JavaScript, Go, or Rust
-in-process session.
+Calling `open` or `run` on an already active session reuses it unless `restart: true` (`--restart`) is passed.
 
-## Terminal size, working directory, and environment
+`restart` replays the last successful `open` or `run` with its original working directory, launch options, resolved render style, and current grid dimensions. It sends `Ctrl+C` first and waits up to the graceful timeout (5000 ms by default; pass `0` to force immediate replacement) before starting a fresh terminal and automatic recording.
+
+`interrupt` cancels in-flight waits immediately without waiting in the operation queue and terminates the child process while keeping the session and last terminal screen available for inspection. Unlike `key press Ctrl+C` or `signal INT`, `interrupt` stops the child at the process level; call `restart` afterward to spawn again or `close` to release the session. Use `sessions` (`tui-test sessions`, `sessions()`, `Sessions()`) to list open sessions.
 
 <Tabs syncKey="example-language">
   <TabItem label="JavaScript">
-
     ```js
-    await terminal.open({
-      cols: 100,
-      rows: 40,
-      cwd: ".",
-      env: { TERM: "xterm-256color" },
-    });
+    await terminal.restart({ gracefulTimeout: 1000 });
+    await terminal.interrupt();
+    await terminal.close();
     ```
   </TabItem>
   <TabItem label="Python">
-
     ```python
-    await terminal.open(cols=100, rows=40, cwd=".", env={"TERM": "xterm-256color"})
+    await terminal.restart(graceful_timeout=1000)
+    await terminal.interrupt()
+    await terminal.close()
     ```
   </TabItem>
   <TabItem label="Rust">
-
-    ```rust
-    use tui_test::OpenOptions;
-
-    terminal.open(OpenOptions {
-        cols: 100,
-        rows: 40,
-        cwd: Some(".".into()),
-        env: vec![("TERM".into(), "xterm-256color".into())],
-        ..Default::default()
-    })?;
-    ```
-  </TabItem>
-  <TabItem label="Go">
-
-    ```go
-    if _, err := terminal.Open(tuitest.OpenOptions{SpawnOptions: tuitest.SpawnOptions{Cols: tuitest.Ptr(uint16(100)), Rows: tuitest.Ptr(uint16(40)), Cwd: ".", Env: map[string]string{"TERM": "xterm-256color"}}}); err != nil {
-        t.Fatal(err)
-    }
-    ```
-  </TabItem>
-  <TabItem label="CLI">
-
-    ```sh
-    tui-test --session build open --cols 100 --rows 40 --cwd . --env TERM=xterm-256color
-    ```
-  </TabItem>
-</Tabs>
-
-The default size is 80 columns by 30 rows. Launch options accept a working
-directory, environment overrides, backend, profile, readiness behavior, and
-timeouts. `open` also accepts a shell.
-See the [CLI spawn options](/docs/reference/cli/#spawn-options) or your
-[language API](/docs/install/#libraries).
-
-## Reuse and restart a session
-
-`open` and `run` reuse a live CLI session unless you pass `--restart`.
-Use an explicit restart when a test needs a fresh process:
-
-<Tabs syncKey="example-language">
-  <TabItem label="JavaScript">
-
-    ```js
-    await terminal.restart({ gracefulTimeout: 5000 });
-    ```
-  </TabItem>
-  <TabItem label="Python">
-
-    ```python
-    await terminal.restart(graceful_timeout=5000)
-    ```
-  </TabItem>
-  <TabItem label="Rust">
-
     ```rust
     use tui_test::Operation;
 
     terminal.execute(Operation::Restart {
-        graceful_timeout_ms: 5000,
+        graceful_timeout_ms: Some(1000),
     })?;
+    terminal.interrupt();
+    terminal.close()?;
     ```
   </TabItem>
   <TabItem label="Go">
-
     ```go
-    if _, err := terminal.Restart(tuitest.RestartOptions{GracefulTimeout: tuitest.Ptr(5000 * time.Millisecond)}); err != nil {
+    timeout := time.Second
+    if _, err := terminal.Restart(tuitest.RestartOptions{GracefulTimeout: &timeout}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Interrupt(); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.Close(); err != nil {
         t.Fatal(err)
     }
     ```
   </TabItem>
   <TabItem label="CLI">
-
     ```sh
-    tui-test --session build restart --graceful-timeout 5000
+    tui-test restart --graceful-timeout 1000
+    tui-test interrupt
+    tui-test close
     ```
   </TabItem>
 </Tabs>
 
-`restart` replays the last successful launch with its original working directory
-and options, plus the latest terminal size. It sends Ctrl-C and waits up to
-five seconds before forcing replacement. A timeout of zero skips that wait.
-The terminal and automatic recording start fresh.
+## Terminal backends and PTY host
 
-Restart works after child exit, but not after closing the session or stopping
-its daemon.
+`tui-test` supports four terminal emulator backends behind the same session, locator, and capture APIs:
 
-## Discover and close sessions
+| Backend | Option value | Notes |
+| --- | --- | --- |
+| Alacritty | `"alacritty"` | Default backend on all surfaces; always compiled into `tui-test-rs`. |
+| Ghostty | `"ghostty"` | Native Ghostty VT engine (`ghostty` Cargo feature in Rust). |
+| Rio | `"rio"` | Rio Sugarloaf/Copa terminal parser (`rio` Cargo feature in Rust). |
+| xterm.js | `"xtermjs"` | Embedded headless xterm.js + Unicode 11 width tables (`xtermjs` Cargo feature in Rust); requires no external Node.js install. |
+
+Prebuilt CLI binaries and Go, Python, and JavaScript packages include all four backends. In Rust, enable optional backends on `tui-test-rs`:
 
 ```sh
-tui-test sessions
-tui-test --session build close
+cargo add tui-test-rs --features ghostty,rio,xtermjs
 ```
 
-`close --all` closes all CLI sessions. In-process discovery and cleanup use
-`sessions()` / `closeAll()` in JavaScript, `sessions()` / `close_all()` in Python,
-and `Sessions` / `CloseAll` in Go. These operate only within their process.
+On Windows, `tui-test` bundles Microsoft's ConPTY (`OpenConsole.exe` and `conpty.dll`) and initializes it lazily when the first PTY opens, giving consistent terminal behavior across Windows hosts without depending on the OS console build. Run `tui-test --version` to inspect the active backend and ConPTY versions.
 
-## CLI daemons
-
-`daemon start`, `daemon status`, and `daemon stop` manage the selected session's
-daemon. `daemon stop --all` stops all CLI daemons. Closing a session or stopping
-a daemon makes its previous launch unavailable to `restart`.
-
-## Session cleanup
-
-Put cleanup in a `finally` block, async context manager, or test cleanup hook.
-Use `closeQuiet()` / `close_quiet()` / `CloseQuiet()` when cleanup should not
-replace the original failure.
-
-Go operations block; use goroutines for concurrent work. JavaScript and Python
-calls are asynchronous, but abandoning a promise or canceling an await does
-not cancel the native operation. Explicitly close the session to interrupt
-pending waits. See [writing tests](/docs/getting-started/writing-tests/) for
-cleanup helpers.
+Terminal emulators can still differ on edge cases: for example, xterm.js records a cell's underline color only when the cell also carries an underline style, and Alacritty and Rio require `CSI ?1049h` rather than legacy `CSI ?47h` to enter the alternate screen. Run your suite against each backend your users rely on when escape-sequence fidelity matters.

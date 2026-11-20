@@ -1,12 +1,10 @@
 ---
 title: Python
-description: Install and use the Python API, asynchronous sessions, locators, and test helpers.
+description: Complete API reference for the tui-test Python package and tui_test.testing helpers.
 editUrl: false
-sidebar:
-  order: 2
 ---
 
-`tui-test` controls, inspects, and tests terminal apps from Python. Sessions run in your process and do not require the CLI.
+`tui-test` provides an `asyncio` Python interface backed by the in-process Rust terminal engine. Published wheels bundle the native library and require no CLI installation.
 
 ## Install
 
@@ -14,402 +12,160 @@ sidebar:
 pip install tui-test
 ```
 
-Python 3.8+ is supported.
-
-The package includes the libraries it needs.
-Set `TUI_TEST_NATIVE_LIBRARY` to an absolute path to use an existing library
-from the same release and platform.
+Supports Python 3.8 and newer. Set `TUI_TEST_NATIVE_LIBRARY` to an absolute library path when running against a local source build instead of a prebuilt wheel.
 
 ### Build from source
 
-Install Rust 1.90 or later and the build dependencies for the supported terminal
-backends. Build a wheel with the standard Python build frontend:
+Install Rust 1.90+ and Zig 0.16, then build a wheel from the repository root:
 
 ```sh
 python -m pip install build
 env -u CARGO_TARGET_DIR python -m build bindings/python
 ```
 
-See [building from source](/docs/contributing/#build-from-source) for requirements.
-
-### Cancellation
-
-Canceling an await does not stop the terminal operation. A canceled `open()`,
-`run()`, or `restart()` can still complete. Close the session explicitly;
-cancellation alone does not confirm that a launch stopped.
+See [building from source](/docs/contributing/#build-from-source) for musl and platform notes.
 
 ## Quick start
 
 ```python
+import asyncio
 from tui_test import TuiTest
 
-async with TuiTest.ephemeral() as terminal:
-    await terminal.run("my-app")
-    await terminal.get_by_text("Ready").expect()
-    await terminal.get_by_text("Continue").click()
-    await terminal.get_by_text("Done").expect()
+async def main():
+    async with TuiTest.ephemeral("quickstart") as terminal:
+        await terminal.run("my-app")
+        await terminal.get_by_text("Ready").expect()
+        await terminal.get_by_text("Continue").click()
+        await terminal.get_by_text("Done").expect()
+
+asyncio.run(main())
 ```
 
-## TuiTest
+## `TuiTest` client
 
 ```python
-TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_history_limit=None, artifacts=None, recording=None, trace=None)
+TuiTest(
+    session=None,
+    *,
+    backend=None,
+    timeouts=None,
+    profile=None,
+    style=None,
+    screen_history_limit=None,
+    artifacts=None,
+    recording=None,
+    trace=None,
+    context=None,
+)
+TuiTest.ephemeral(prefix=None, **options)
 ```
 
 | Option | Type | Default |
 | --- | --- | --- |
-| `session` | `str` | `TUI_TEST_SESSION` or `"default"` |
+| `session` | `str \| None` | `TUI_TEST_SESSION` or `"default"` |
 | `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs"` | `"alacritty"` |
-| `timeouts` | `Timeouts \| dict` | built-in defaults |
-| `profile` | `Profile \| dict` | built-in profile |
-| `screen_history_limit` | `int \| None` | core default |
-| `artifacts` | `dict` | off |
-| `recording` | `AutomaticRecording \| dict` (directory only) | default recording directory |
-| `trace` | `TraceOptions \| dict` | `{"mode": "off", "directory": ".tui-test/traces"}` |
+| `timeouts` | `Timeouts \| dict` | 5000 ms (`text`, `idle`), 30000 ms (`command`, `exit`, `ready`) |
+| `profile` | `Profile \| dict` | `scrollback=10000`, default palette |
+| `style` | `RenderStyle \| dict` | default window, font, padding, and cursor style |
+| `screen_history_limit` | `int \| None` | `10` |
+| `recording` | `AutomaticRecording \| dict` (`directory`, `mode`) | `mode="disabled"` |
+| `artifacts` | `dict` (`dir`, `on_failure`, `include_recording`) | off |
+| `trace` | `TraceOptions \| dict` (`mode`, `directory`) | `{"mode": "off", "directory": ".tui-test/traces"}` |
+| `context` | `ExecutionContext` (`operation_name`, `diagnostic_context`, `artifacts`, `trace`, `screen_history_limit`) | none |
 
-Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Users can open `trace.html`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
+Client attributes are `terminal.session`, `terminal.keyboard`, and `terminal.mouse`. Canceling an `asyncio` task or `await` does not stop an active native call; close sessions explicitly with `async with`, `await terminal.close_quiet()`, or `await terminal.interrupt()` followed by `close()`.
 
-`artifacts["on_failure"]` selects `"none"`, `"text"`, `"html"`, or `"all"`. Use `include_recording` to include the cast in failure artifacts.
-
-### Properties
-
-| Property | Type |
-| --- | --- |
-| `session` | `str` |
-| `keyboard` | keyboard helper |
-| `mouse` | mouse helper |
-
-### Lifecycle
+### Lifecycle and trace control
 
 | Method | Description |
 | --- | --- |
-| `TuiTest.ephemeral(prefix=None, **options)` | Create a unique session. |
-| `await open(**options)` | Open a shell. |
-| `await run(program, *args, **options)` | Run a program. |
-| `await restart(graceful_timeout=5000)` | Restart the session. |
-| `await close()` | Close the session. |
-| `await close_quiet()` | Close without raising. |
-| `async with TuiTest()` | Close on exit. |
+| `await open(**options)` | Start a shell (`shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `wait_ready`, `restart`, `retries`, `profile`, `style`, `timeouts`, `recording`, `screen_history_limit`, `context`). |
+| `await run(program, *args, **options)` | Spawn an executable directly (same keyword options as `open` except `shell`). |
+| `await restart(graceful_timeout=5000)` | Replay the previous spawn. |
+| `await interrupt()` | Cancel pending waits immediately and terminate the child while keeping the session open. |
+| `await finish_trace(failed=False)` | Finalize the session trace without closing the terminal. |
+| `await close()` / `await close_quiet()` | Terminate the child and release the session (`async with` calls `close()`). |
 
-`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `wait_ready`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
-
-The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
-
-### Input
+### Input, scrollback, and signals
 
 | Method | Description |
 | --- | --- |
-| `await submit(text=None)` | Type text and press Enter. |
-| `await type(text)` | Type text. |
-| `await write(data)` | Write raw bytes. |
-| `await press(*keys)` | Alias for `keyboard.press()`. |
-| `await resize(cols, rows)` | Resize the terminal. |
-| `await scroll(lines)` | Move through native history; positive values show older output. |
-| `await scroll_to_top()` / `await scroll_to_bottom()` | Show the oldest output or the live screen. |
-| `await get_viewport()` | Return a `Viewport` dictionary with `offset` and `history`, in rows. |
-| `await signal(name)` | Send `INT`, `TERM`, `KILL`, or `QUIT`. |
-| `await kill()` | Kill the child process. |
+| `await submit(text=None)` | Type optional text and press Enter. |
+| `await type(text)` / `await write(data)` | Type printable text or write raw UTF-8/escape sequences. |
+| `await press(*keys)` | Shorthand for `await keyboard.press(*keys)`. |
+| `await keyboard.press` / `down` / `repeat` / `up` | Send named keys and modifiers (`"Ctrl+C"`, `"Shift+Tab"`). |
+| `await mouse.click` / `move` / `down` / `up` / `drag` / `scroll` | Send zero-based cell mouse actions (`button`, `alt`, `ctrl`, `shift`, `clicks`, `on_text`, `amount`). |
+| `await resize(cols, rows)` | Resize the PTY and grid. |
+| `await scroll(lines)` / `await scroll_to_top()` / `await scroll_to_bottom()` | Navigate native scrollback (`lines > 0` moves into older output). |
+| `await signal(name)` / `await kill()` | Send `"INT"`, `"TERM"`, `"KILL"`, or `"QUIT"`. |
 
-### Native history
+### State inspection
 
-`scroll(lines)` accepts integers from -2147483648 through 2147483647.
-Positive values show older output. Negative values move toward the live screen.
-Zero leaves the viewport unchanged. Movement stops at the available history boundaries.
-`get_viewport()` returns a `Viewport` dictionary with `offset` and `history` integer fields.
-Both fields count rows. An offset of zero means the live screen.
-
-Visible text, locators, and captures use this viewport.
-`text(full=True)` remains independent: it returns history plus the live screen.
-New output preserves the historical view until retained history expires.
-Keyboard input returns to the live screen.
-Mouse input and historical locator clicks fail while the viewport shows history.
-Call `scroll_to_bottom()` before mouse input. This API is separate from `mouse.scroll()`.
-
-`get_cursor()` and `State.cursor` retain the application cursor coordinates.
-Captures project that cursor into the viewport and hide it outside the view.
-Raster recordings capture viewport changes. Asciicast remains a PTY stream.
-
-```python
-await terminal.scroll_to_top()
-print(await terminal.get_viewport())
-print(await terminal.text())
-print(await terminal.text(full=True))
-await terminal.scroll(-2)
-await terminal.scroll_to_bottom()
-```
-
-### State
-
-| Method | Returns |
+| Method | Return type |
 | --- | --- |
 | `await state()` | `State` |
 | `await text(full=False)` | `str` |
+| `await packed_screen(full=False)` | `dict` with read-only UTF-8 `memoryview`, `cols`, and `rows` |
 | `await cells(x, y, w=1, h=1)` | `list[Cell]` |
-| `await get_command()` | `str \| None` |
-| `await get_output()` | `str \| None` |
-| `await get_exit_code()` | `int \| None` |
-| `await get_cwd()` | `str \| None` |
-| `await get_cursor()` | `Cursor` |
-| `await get_size()` | `dict` |
-| `await get_title()` | `str \| None` |
-| `await get_clipboard()` | `str` |
-| `await get_bell_count()` | `int` |
-| `await get_bell_events()` | `list[BellEvent]` |
+| `await get_viewport()` / `await get_size()` | `Viewport` (`offset`, `history`) / `dict` (`cols`, `rows`) |
+| `await get_command()` / `await get_output()` / `await get_exit_code()` / `await get_cwd()` | Tracked shell command metadata |
+| `await get_cursor()` / `await get_modes()` / `await get_colors()` | `Cursor`, `dict[str, bool]`, `dict` |
+| `await get_title()` / `await get_clipboard()` | `str \| None` / `str` |
+| `await get_bell_count()` / `await get_bell_events()` | `int` / `list[BellEvent]` |
 
-### Waits and assertions
+### Waits, assertions, snapshots, and captures
 
 | Method | Description |
 | --- | --- |
-| `await wait_title(text, regex=False, not_=False, timeout=None)` | Wait for a title. |
-| `await wait_clipboard(text=None, timeout=None)` | Wait for a clipboard change or match. |
-| `await wait_idle(timeout=None)` | Wait for the screen to stop changing. |
-| `await wait_command(timeout=None)` | Wait for a submitted command. |
-| `await wait_exit(timeout=None)` | Wait for the program to exit. |
-| `await wait_ready(timeout=None)` | Wait for a shell prompt. |
-| `await wait_bell(timeout=None)` | Wait for a bell. |
-| `await expect_title(text, regex=False, not_=False, timeout=None)` | Assert the title. |
-| `await expect_exit_code(code, timeout=None)` | Assert the last exit code. |
-| `await expect_output(text, regex=False)` | Assert command output. |
-| `await expect_bell_count(count, timeout=None)` | Wait until the cumulative bell count reaches `count`. |
-| `await expect_snapshot(name, **options)` | Assert or update a snapshot. |
+| `await wait_ready(timeout=None)` / `wait_command` / `wait_exit` / `wait_idle` | Lifecycle and quiet-screen waits. |
+| `await wait_title(text, regex=False, not_=False, timeout=None)` | Wait for window title match or non-match. |
+| `await wait_clipboard(text=None, timeout=None)` | Wait for next OSC 52 change, string match, or compiled text `re.Pattern`. |
+| `await wait_bell(timeout=None)` / `await expect_bell_count(count, timeout=None)` | Wait for a bell or cumulative count. |
+| `await expect_title` / `expect_output(text, regex=False)` / `expect_exit_code(code, timeout=None)` | Assert title, command output, or exit code. |
+| `await expect_cursor(**options)` | Poll for `x`, `y`, `visible`, `shape`, `timeout`. |
+| `await expect_mode(mode, enabled, timeout=None)` | Poll for a boolean terminal mode. |
+| `await expect_colors(**options)` | Poll for `foreground`, `background`, `cursor`, `palette` (`dict[int, str]`), `timeout`. |
+| `await expect_snapshot(name, *, update=False, include_style=False, include_title=False, cwd=None)` | Compare or update a screen snapshot baseline. |
+| `await screenshot(path=None, full=False, zoom=None, background=None, transparent=False)` | Return text or save `.svg` / `.png`. |
+| `await start_recording(path, **options)` | Start `.gif`, `.apng`, `.mp4`, or `.cast` (`format`, `fps`, `speed`, `idle_time_limit`, `zoom`, `background`, `transparent`). |
+| `await pause_recording()` / `await resume_recording()` / `await stop_recording()` | Pause, resume (raster only), or finalize an active recording. |
 
-`wait_clipboard()` waits for the next change. A string matches text. A compiled text `re.Pattern` uses Python's `search()` semantics; bytes patterns are rejected.
-
-Snapshot options are `update`, `include_style`, and `include_title`.
-
-### Capture
-
-| Method | Description |
-| --- | --- |
-| `await screenshot(path=None, full=False, zoom=None, background=None, transparent=False)` | Return text or save SVG or PNG. |
-| `await start_recording(path, **options)` | Start APNG, GIF, MP4, or asciinema recording. |
-| `await pause_recording()` | Pause APNG, GIF, or MP4 capture while the terminal continues. |
-| `await resume_recording()` | Resume raster capture from the live terminal without paused time. |
-| `await stop_recording()` | Finish the recording and return its path. |
-
-Recording options: `format`, `fps`, `speed`, `idle_time_limit`, `zoom`, `background`, and `transparent`. MP4 requires `ffmpeg` and does not support transparency.
-
-Asciicast pause and resume return usage errors without changing the recording.
-Automatic diagnostic recordings and recovery casts remain continuous, including output during pauses.
-
-Raster recording samples the live terminal at `fps` (default: 30) and preserves elapsed time until stop.
-There is no default idle cap or extra final hold.
-Set `idle_time_limit` to cap unchanged visual intervals before `speed` scales playback time.
-Asciicast remains a timestamped output stream; FPS sampling does not change it.
-
-The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `format` overrides it.
-
-## Locator
-
-Locators resolve against the latest terminal screen before every read or action.
+## `Locator`
 
 ```python
-from tui_test import TextStyle
+from tui_test import TextAnchor, TextScope, TextStyle
 
 save = (
-    terminal
-    .get_by_text("Settings")
-    .get_by_text("Save", direction="after")
-    .get_by_style(TextStyle(foreground="green"))
-    .unique()
+    terminal.get_by_text(
+        "Save",
+        scope=TextScope(after=TextAnchor("Network"), before=TextAnchor("Advanced")),
+    )
+    .with_style(TextStyle(bold=True))
+    .relative_to(terminal.get_by_text("Settings"), "after")
+    .or_(terminal.get_by_link("app://save"))
 )
-
-await save.click()
+await save.unique().click()
 ```
-
-### Create a locator
-
-| Method | Options |
-| --- | --- |
-| `terminal.get_by_text(text, **options)` | `regex`, `full`, `whitespace` |
-| `terminal.get_by_style(style, **options)` | `full` |
-| `terminal.get_by_link(uri, **options)` | `full` |
-| `locator.get_by_text(text, **options)` | `regex`, `full`, `whitespace`, `direction` |
-| `locator.get_by_style(style, **options)` | `full`, `direction` |
-| `locator.get_by_link(uri, **options)` | `full`, `direction` |
-
-`whitespace` is `"exact"` or `"normalize"`. `direction` is `"within"`, `"after"`, or `"before"`.
-
-`TextStyle` fields are `foreground`, `background`, `bold`, `dim`, `italic`, `underline_style`, `underline_color`, `inverse`, `hidden`, `strikethrough`, and `blink`.
-
-`get_by_link(uri)` matches an exact OSC 8 target, not visible URL text;
-`get_by_link("")` requires no link. Root style/link selectors find runs within
-each row. Chained calls with the default `within` direction check whole
-matches. Styles skip blanks if visible text exists; links check every cell.
-
-### Compose locators
-
-```python
-link = terminal.get_by_link("https://example.com")
-bold = terminal.get_by_style(TextStyle(bold=True))
-bold_link_cells = bold.and_(link)
-either = link.or_(terminal.get_by_text("Help"))
-sections = terminal.get_by_text("Docs and Help")
-contains_link = sections.filter(has=link)
-without_old_text = sections.filter(has_not=terminal.get_by_text("old"))
-entirely_linked = sections.get_by_link("https://example.com")
-```
-
-`and_()` keeps shared cells; `or_()` combines cells without duplicates. Adjacent
-cells merge within each physical row, even across original matches. Gaps and
-row breaks split runs. Counts and clicks use these runs; text keeps exact
-whitespace.
-
-`filter` accepts only locators. `has` requires a match inside each candidate;
-`has_not` requires none. Both conditions apply when supplied, and the inner
-match may cover the whole candidate. For partially linked `"Docs"`,
-`filter(has=link)` keeps the whole word, `get_by_link(uri)` rejects it, and
-`and_(link)` returns its linked cells.
-
-Use locators from one `TuiTest`. Composition leaves them unchanged and reads
-one fresh snapshot when used. Selection order matters: `a.first().and_(b)`
-differs from `a.and_(b).first()`. Any `full` branch includes scrollback for the
-whole query. Errors propagate.
-
-### Select matches
 
 | Method | Description |
 | --- | --- |
-| `any()` | Keep all matches. |
-| `unique()` | Require one match. |
-| `first()` | Select the first match. |
-| `last()` | Select the last match. |
-| `nth(index)` | Select a zero-based match. |
+| `get_by_text(text, *, regex=False, full=False, whitespace="exact", scope=None, match_style=None, direction="within")` | Match text. |
+| `get_by_style(style, *, full=False, match_style=None, direction="within")` | Match styled cell runs or filter parent matches. |
+| `get_by_link(uri, *, full=False, match_style=None, direction="within")` | Match OSC 8 link runs (`""` matches unlinked cells). |
+| `with_style(style)` | Apply a whole-match `TextStyle` constraint to a leaf query. |
+| `relative_to(parent, direction="within")` | Scope `"within"`, `"after"`, or `"before"` a locator on the same client. |
+| `and_(other)` / `or_(other)` | Intersect or union matched cells into contiguous per-row runs. |
+| `filter(*, has=None, has_not=None)` | Keep candidate matches containing `has` and excluding `has_not`. |
+| `any()` / `unique()` / `first()` / `last()` / `nth(index)` | Occurrence selection. |
+| `await locations()` / `await location()` / `await count()` / `await all()` | Immediate screen queries (`location()` requires one match). |
+| `await wait(state="visible", timeout=None)` / `await expect(not_=False, timeout=None)` | Retry for `"visible"` or `"hidden"` state. |
+| `await click(**options)` | Retry for one match and click its middle cell (`button`, `alt`, `ctrl`, `shift`, `clicks`, `timeout`). |
+| `await highlight(timeout=None)` / `await highlight_matches(timeout=None)` | Highlight matches (`highlight_matches` returns `list[TextMatch]`). |
 
-### Read and act
+## Module functions, test helpers, and errors
 
-| Method | Description |
-| --- | --- |
-| `await locations()` | Return all selected locations. |
-| `await location()` | Return one location. |
-| `await count()` | Return the current count. |
-| `await all()` | Return one locator per current match. |
-| `await wait(state="visible", timeout=None)` | Wait for `"visible"` or `"hidden"`. |
-| `await expect(not_=False, timeout=None)` | Assert the locator. |
-| `await click(**options)` | Click the middle cell. |
-| `await highlight(timeout=None)` | Highlight matches. |
+`tui_test` exports `await sessions()`, `await close_all()`, `await get_recording(session=None)`, `unique_session(prefix=None)`, and `__version__`.
 
-`click()` accepts `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`. `button` is `"left"`, `"middle"`, or `"right"`.
+`tui_test.testing` exports `async with terminal(**options)`, `await create_terminal(**options)`, `await close_all_tracked()`, `set_terminal_defaults(**options)`, `reset_terminal_defaults()`, `track_terminal(t)`, `untrack_terminal(t)`, `tracked_count()`, `terminal_snapshot(text)`, and `DEFAULT_SHELL`.
 
-`location()` and `click()` require one match. `all()` does not wait.
-
-## Keyboard
-
-| Method | Description |
-| --- | --- |
-| `await keyboard.press(*keys)` | Press keys. |
-| `await keyboard.down(*keys)` | Send keydown events. |
-| `await keyboard.repeat(*keys)` | Send repeat events. |
-| `await keyboard.up(*keys)` | Send keyup events. |
-
-```python
-await terminal.keyboard.press("Ctrl+C")
-await terminal.keyboard.press("Escape", ":", "w", "q", "Enter")
-```
-
-Named keys include `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Delete`, `Backspace`, `Tab`, `Enter`, `Space`, `Escape`, and `F1` through `F12`. Join modifiers such as `Ctrl`, `Alt`, `Shift`, `Super`, `Meta`, or `Hyper` with `+`.
-
-## Mouse
-
-Coordinates are zero-based terminal cells.
-
-| Method | Description |
-| --- | --- |
-| `await mouse.click(x=None, y=None, **options)` | Click a cell or `on_text`. |
-| `await mouse.move(x, y)` | Move the pointer. |
-| `await mouse.down(x, y, **options)` | Press a button. |
-| `await mouse.up(x, y, **options)` | Release a button. |
-| `await mouse.drag(x1, y1, x2, y2, **options)` | Drag between cells. |
-| `await mouse.scroll("up" \| "down", amount=3)` | Scroll. |
-
-Button options are `button`, `alt`, `ctrl`, and `shift`. Click also accepts `on_text` and `clicks`.
-
-```python
-await terminal.mouse.click(10, 5, button="right", ctrl=True)
-```
-
-## Module functions
-
-| Function | Description |
-| --- | --- |
-| `await sessions()` | List sessions in this process. |
-| `await close_all()` | Close all sessions in this process. |
-| `await get_recording(session=None)` | Return an automatic asciinema recording. |
-| `unique_session(prefix=None)` | Create a unique session name. |
-
-## Test helpers
-
-Import from `tui_test.testing`.
-
-| Function | Description |
-| --- | --- |
-| `await create_terminal(**options)` | Create, open, and track a terminal. |
-| `async with terminal(**options)` | Open and close a terminal. |
-| `await close_all_tracked()` | Close tracked terminals. |
-| `set_terminal_defaults(**options)` | Set suite defaults. |
-| `reset_terminal_defaults()` | Reset suite defaults. |
-| `track_terminal(terminal)` | Track a terminal. |
-| `untrack_terminal(terminal)` | Stop tracking a terminal. |
-| `tracked_count()` | Count tracked terminals. |
-| `terminal_snapshot(text)` | Normalize text for snapshots. |
-
-`TerminalOptions` adds `shell`, `program`, `session`, and `prefix` to the client and spawn options.
-
-`DEFAULT_SHELL` is the platform default.
-
-```python
-from tui_test.testing import terminal
-
-async with terminal(program=("my-app",)) as app:
-    await app.get_by_text("Ready").expect()
-```
-
-## Configuration
-
-```python
-from tui_test import AutomaticRecording, Colors, Profile, Timeouts
-
-terminal = TuiTest(
-    profile=Profile(
-        scrollback=500,
-        colors=Colors(foreground="#ffffff", background="#000000"),
-    ),
-    timeouts=Timeouts(text=10_000, command=60_000),
-    artifacts={"dir": "artifacts", "on_failure": "all"},
-    trace={"mode": "on-failure", "directory": "artifacts/traces"},
-    recording=AutomaticRecording(directory="artifacts/casts"),
-)
-```
-
-## Types
-
-| Type | Description |
-| --- | --- |
-| `State` | Session state and visible text. |
-| `Cursor` | Typed dictionary with integer `x`/`y`, boolean `visible`, and string `shape`/`color`. |
-| `Cell` | One terminal cell and its style. |
-| `TextMatch` | Matched text, positions, and spans. |
-| `TextStyle` | Locator style fields. |
-| `Profile` | Scrollback and colors. |
-| `Timeouts` | Text, idle, command, exit, and ready timeouts. |
-| `AutomaticRecording` | Automatic recording mode and directory. |
-| `Colors` | Terminal palette. |
-| `MouseButton` | `"left"`, `"middle"`, or `"right"`. |
-| `TextPosition`, `TextSpan` | Match coordinates. |
-| `FailureDetails` | Structured operation, locator, process, runtime, and screen evidence. |
-| `FailureArtifactRef` | Paths and write status for a failure artifact. |
-
-`__version__` contains the package version.
-
-## Errors
-
-| Error | Exit code |
-| --- | --- |
-| `ExpectationError` | `1` |
-| `UsageError` | `2` |
-| `NoSessionError` | `3` |
-| `InternalError` | `5` |
-
-All errors extend `TuiTestError`. Structured native failures expose `details` and `artifact`; expectation errors continue to populate compatibility `terminal.text` and `terminal.screenshot` fields. Failure artifacts can contain terminal output, titles, locator operands, and recordings, so review them before uploading.
-
-Sessions are local to the current process and cannot be controlled by the CLI. Cancelling a task does not stop an active terminal operation.
+`ExpectationError` (`1`), `UsageError` (`2`), `NoSessionError` (`3`), and `InternalError` (`5`) inherit from `TuiTestError` and attach structured `details` and `artifact` metadata when available.

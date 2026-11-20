@@ -10,6 +10,29 @@ type Result<T> = std::result::Result<T, TuiTestError>;
 
 include!("input_generated.rs");
 
+unsafe fn style_padding(
+    value: TuiPadding,
+    default: tui_test::render::style::Padding,
+) -> Result<tui_test::render::style::Padding> {
+    use tui_test::render::style::{Padding, PaddingSides};
+    let sides = unsafe { style_padding_sides(value.sides)? };
+    if let Some(uniform) = value.uniform.option() {
+        if sides != PaddingSides::default() {
+            return Err(TuiTestError::usage(
+                "padding cannot combine uniform and individual sides",
+            ));
+        }
+        return Ok(Padding::Uniform(
+            u32::try_from(uniform).map_err(|_| TuiTestError::usage("padding exceeds u32"))?,
+        ));
+    }
+    Ok(if sides == PaddingSides::default() {
+        default
+    } else {
+        Padding::Sides(sides)
+    })
+}
+
 impl TuiOptionalU64 {
     pub(crate) fn option(self) -> Option<u64> {
         self.present.then_some(self.value)
@@ -152,4 +175,25 @@ pub(crate) unsafe fn recording(value: TuiRecordingOptions) -> Result<Operation> 
         .map(|v| u8::try_from(v).map_err(|_| TuiTestError::usage("fps must be between 0 and 255")))
         .transpose()?;
     unsafe { recording_input(value, format, fps) }
+}
+
+pub(crate) unsafe fn expect_colors(value: TuiColorExpectation) -> Result<Operation> {
+    let palette = unsafe { pairs(value.palette, value.palette_len)? }
+        .into_iter()
+        .map(|(index, color)| {
+            Ok((
+                index
+                    .parse::<u8>()
+                    .map_err(|_| TuiTestError::usage("palette index must be between 0 and 255"))?,
+                color,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Operation::ExpectColors {
+        foreground: unsafe { value.foreground.optional()? },
+        background: unsafe { value.background.optional()? },
+        cursor: unsafe { value.cursor.optional()? },
+        palette,
+        timeout_ms: value.timeout_ms.option(),
+    })
 }

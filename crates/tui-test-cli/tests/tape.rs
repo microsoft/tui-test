@@ -183,6 +183,8 @@ fn explicit_session_and_diagnostic_flags_are_rejected() {
             "--failure-artifact-recording",
         ],
         vec!["--diagnostic-context", "not-even-a-pair"],
+        vec!["--context-file", "missing.json"],
+        vec!["--operation-name", "example"],
     ] {
         for action in ["check", "run"] {
             for before in [true, false] {

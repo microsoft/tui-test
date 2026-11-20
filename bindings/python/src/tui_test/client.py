@@ -36,6 +36,8 @@ from .errors import (
     make_error,
 )
 from .types import (
+    ExecutionContext,
+    TextScope,
     AutomaticRecording,
     TraceOptions,
     Backend,
@@ -47,6 +49,7 @@ from .types import (
     MouseButton,
     OpenResult,
     Profile,
+    RenderStyle,
     RecordingFormat,
     State,
     TextMatch,
@@ -182,8 +185,9 @@ def _text_query_value(
     whitespace: str,
     direction: LocatorDirection,
     within: Optional["_LocatorQuery"],
+    scope: Optional[TextScope] = None,
 ) -> "_LocatorQuery":
-    return _append_node(
+    query = _append_node(
         within,
         _text_stage_value(
             text,
@@ -194,6 +198,21 @@ def _text_query_value(
         ),
         relative=True,
     )
+    if scope is not None:
+        anchors = {}
+        for name in ("after", "before"):
+            anchor = getattr(scope, name)
+            if anchor is not None:
+                occurrence = _occurrence_fields(anchor.occurrence)
+                anchors[name] = {
+                    "text": anchor.text, "regex": anchor.regex,
+                    "occurrence": (
+                        {"nth": occurrence["nth"]}
+                        if occurrence.get("nth") is not None else occurrence["occurrence"]
+                    ),
+                }
+        query.current()["scope"] = anchors
+    return query
 
 
 def _style_query_value(
@@ -293,6 +312,41 @@ def _append_operand(query: _LocatorQuery, other: _LocatorQuery) -> int:
                 node[field] = reference + offset
         query.nodes.append(node)
     return offset + other.root
+
+
+def _spawn_context(
+    recording: Optional[AutomaticRecording], context: Optional[ExecutionContext],
+) -> Dict[str, Any]:
+    result = {}
+    if recording is not None:
+        values = cfg.normalize_recording(recording) or {}
+        result["recording_directory"] = values.get("directory")
+        result["recording_mode"] = values.get("mode")
+    if context is not None:
+        result["context"] = _context_values(context)
+    return result
+
+
+def _context_values(context: Optional[ExecutionContext]) -> Optional[Dict[str, Any]]:
+    if context is None:
+        return None
+    result = {
+        "operation_name": context.operation_name,
+        "diagnostic_context": (
+            None if context.diagnostic_context is None else dict(context.diagnostic_context)
+        ),
+        "screen_history_limit": context.screen_history_limit,
+    }
+    if context.artifacts is not None:
+        directory, mode, recording = _artifact_values(context.artifacts)
+        result.update(
+            artifact_directory=directory, artifact_mode=mode,
+            artifact_include_recording=recording,
+        )
+    if context.trace is not None:
+        trace = cfg.normalize_trace(context.trace) or {}
+        result.update(trace_mode=trace.get("mode") or "off", trace_directory=trace.get("directory"))
+    return {key: value for key, value in result.items() if value is not None}
 
 
 def _artifact_values(
@@ -482,6 +536,27 @@ class Locator:
     def any(self) -> "Locator":
         return self._with_occurrence("any")
 
+    def with_style(self, style: TextStyle) -> "Locator":
+        """Keep whole matches whose visible cells satisfy the style."""
+        if not isinstance(style, TextStyle):
+            raise TypeError("style must be a TextStyle")
+        if set(vars(style)) - set(TextStyle.__dataclass_fields__):
+            raise ValueError("unknown style property")
+        query = copy.deepcopy(self._query)
+        query.current()["match_style"] = asdict(style)
+        return Locator(self._client, query)
+
+    def relative_to(
+        self, parent: "Locator", direction: LocatorDirection = "within",
+    ) -> "Locator":
+        if direction not in ("within", "after", "before"):
+            raise ValueError("locator direction must be within, after, or before")
+        query = copy.deepcopy(self._operand(parent))
+        within = query.root
+        query.root = _append_operand(query, self._query)
+        query.current().update(within=within, direction=direction)
+        return Locator(self._client, query)
+
     def unique(self) -> "Locator":
         return self._with_occurrence("unique")
 
@@ -504,6 +579,7 @@ class Locator:
         full: bool = False,
         whitespace: str = "exact",
         direction: LocatorDirection = "within",
+        scope: Optional[TextScope] = None,
     ) -> "Locator":
         return self._client._make_text_locator(
             text,
@@ -512,6 +588,7 @@ class Locator:
             whitespace=whitespace,
             direction=direction,
             within=self._query,
+            scope=scope,
         )
 
     def get_by_style(
@@ -668,13 +745,17 @@ class Locator:
         )
 
     async def highlight(self, *, timeout: Optional[int] = None) -> None:
-        await self._client._guarded(
+        await self.highlight_matches(timeout=timeout)
+
+    async def highlight_matches(self, *, timeout: Optional[int] = None) -> List[TextMatch]:
+        values = await self._client._guarded(
             "locator.highlight",
             self._client._native.highlight_locator(
                 self._query.payload(),
                 self._client._timeout("text", timeout),
             ),
         )
+        return [TextMatch.from_dict(value) for value in values]
 
     async def expect(
         self,
@@ -700,10 +781,12 @@ class TuiTest:
         backend: Optional[Backend] = None,
         timeouts: Optional[Timeouts] = None,
         profile: Optional[Profile] = None,
+        style: Optional[RenderStyle] = None,
         screen_history_limit: Optional[int] = None,
         artifacts: Optional[Dict[str, Any]] = None,
         recording: Optional[AutomaticRecording] = None,
         trace: Optional[TraceOptions] = None,
+        context: Optional[ExecutionContext] = None,
     ) -> None:
         self._session = cfg.resolve_session(session)
         recording_values = cfg.normalize_recording(recording) or {}
@@ -713,6 +796,9 @@ class TuiTest:
             artifact_mode,
             artifact_include_recording,
         ) = _artifact_values(artifacts)
+        native_options = {"context": _context_values(context)} if context is not None else {}
+        if recording_values.get("mode") is not None:
+            native_options["recording_mode"] = recording_values["mode"]
         self._native = native.NativeSession(
             self._session,
             recording_values.get("directory"),
@@ -721,10 +807,12 @@ class TuiTest:
             artifact_include_recording,
             trace_values.get("mode"),
             trace_values.get("directory"),
+            **native_options,
         )
         self._backend = cfg.normalize_backend(backend)
         self._timeouts = cfg.normalize_timeouts(timeouts)
         self._profile = cfg.normalize_profile(profile)
+        self._style = style
         self._screen_history_limit = screen_history_limit
         self.keyboard = _Keyboard(self)
         self.mouse = _Mouse(self)
@@ -783,8 +871,11 @@ class TuiTest:
         wait_ready: Optional[bool] = None,
         restart: bool = False,
         profile: Optional[Profile] = None,
+        style: Optional[RenderStyle] = None,
         timeouts: Optional[Timeouts] = None,
         retries: int = 0,
+        recording: Optional[AutomaticRecording] = None,
+        context: Optional[ExecutionContext] = None,
     ) -> OpenResult:
         env_values = _env_pairs(env)
         profile_values = _profile_values(
@@ -805,9 +896,10 @@ class TuiTest:
             *profile_values,
             *timeout_values,
             self._screen_history_limit,
+            style if style is not None else self._style,
         )
         return await self._spawn(
-            lambda: self._native.open(*native_args),
+            lambda: self._native.open(*native_args, **_spawn_context(recording, context)),
             retries,
         )
 
@@ -823,8 +915,11 @@ class TuiTest:
         wait_ready: Optional[bool] = None,
         restart: bool = False,
         profile: Optional[Profile] = None,
+        style: Optional[RenderStyle] = None,
         timeouts: Optional[Timeouts] = None,
         retries: int = 0,
+        recording: Optional[AutomaticRecording] = None,
+        context: Optional[ExecutionContext] = None,
     ) -> OpenResult:
         env_values = _env_pairs(env)
         profile_values = _profile_values(
@@ -846,9 +941,10 @@ class TuiTest:
             *profile_values,
             *timeout_values,
             self._screen_history_limit,
+            style if style is not None else self._style,
         )
         return await self._spawn(
-            lambda: self._native.run(*native_args),
+            lambda: self._native.run(*native_args, **_spawn_context(recording, context)),
             retries,
         )
 
@@ -857,6 +953,13 @@ class TuiTest:
 
     async def close(self, *, failed: Optional[bool] = None) -> None:
         await self._await(self._native.close(failed))
+
+    async def finish_trace(self, failed: bool = False) -> None:
+        await self._await(self._native.finish_trace(failed))
+
+    async def interrupt(self) -> None:
+        """Cancel pending operations and terminate the child without the operation queue."""
+        await self._await(self._native.interrupt())
 
     async def close_quiet(self) -> None:
         try:
@@ -898,6 +1001,7 @@ class TuiTest:
         regex: bool = False,
         full: bool = False,
         whitespace: str = "exact",
+        scope: Optional[TextScope] = None,
     ) -> Locator:
         return self._make_text_locator(
             text,
@@ -906,6 +1010,7 @@ class TuiTest:
             whitespace=whitespace,
             direction="within",
             within=None,
+            scope=scope,
         )
 
     def _make_text_locator(
@@ -917,6 +1022,7 @@ class TuiTest:
         whitespace: str,
         direction: LocatorDirection,
         within: Optional[_LocatorQuery],
+        scope: Optional[TextScope] = None,
     ) -> Locator:
         return Locator(
             self,
@@ -927,6 +1033,7 @@ class TuiTest:
                 whitespace=whitespace,
                 direction=direction,
                 within=within,
+                scope=scope,
             ),
         )
 
@@ -972,6 +1079,10 @@ class TuiTest:
     ) -> Tuple[memoryview, int, int]:
         """Return owned UTF-8 logical rows and terminal cell dimensions."""
         return await self._await(self._native.packed_screen(full))
+
+    async def packed_screen(self, *, full: bool = False) -> Tuple[memoryview, int, int]:
+        """Return owned UTF-8 bytes, columns, and rows, including trailing spaces."""
+        return await self._packed_screen(full=full)
 
     async def cells(self, x: int, y: int, w: int = 1, h: int = 1) -> List[Cell]:
         data = await self._await(self._native.cells(x, y, w, h))
@@ -1080,6 +1191,28 @@ class TuiTest:
 
     async def resume_recording(self) -> None:
         await self._await(self._native.resume_recording())
+
+    async def get_modes(self) -> Dict[str, bool]:
+        return await self._await(self._native.get_modes())
+
+    async def get_colors(self) -> Dict[str, Any]:
+        return await self._await(self._native.get_colors())
+
+    async def expect_mode(self, mode: str, enabled: bool, *, timeout: Optional[int] = None) -> None:
+        await self._guarded("expectMode", self._native.expect_mode(mode, enabled, self._timeout("text", timeout)))
+
+    async def expect_cursor(self, *, x: Optional[int] = None, y: Optional[int] = None,
+                            visible: Optional[bool] = None, shape: Optional[str] = None,
+                            timeout: Optional[int] = None) -> None:
+        await self._guarded("expectCursor", self._native.expect_cursor(
+            x, y, visible, shape, self._timeout("text", timeout)))
+
+    async def expect_colors(self, *, foreground: Optional[str] = None, background: Optional[str] = None,
+                            cursor: Optional[str] = None, palette: Optional[Dict[int, str]] = None,
+                            timeout: Optional[int] = None) -> None:
+        await self._guarded("expectColors", self._native.expect_colors(
+            foreground, background, cursor, palette if palette is not None else {},
+            self._timeout("text", timeout)))
 
     async def wait_title(
         self,
@@ -1218,11 +1351,13 @@ class TuiTest:
         update: bool = False,
         include_style: bool = False,
         include_title: bool = False,
+        cwd: Optional[str] = None,
     ) -> str:
         return await self._guarded(
             "expect_snapshot",
             self._native.snapshot(
-                name, update, include_style, include_title, os.getcwd()
+                name, update, include_style, include_title,
+                os.getcwd() if cwd is None else cwd,
             ),
         )
 
