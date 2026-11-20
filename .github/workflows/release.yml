@@ -88,7 +88,7 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-pc-windows-msvc
-            os: windows-2025
+            os: windows-2022
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -170,7 +170,7 @@ jobs:
             os: macos-latest
             args: --target aarch64-apple-darwin
           - target: x86_64-pc-windows-msvc
-            os: windows-2025
+            os: windows-2022
             args: --target x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
@@ -384,7 +384,7 @@ jobs:
             wheel: cp311-macosx_arm64
             deployment-target: "11.0"
           - target: x86_64-pc-windows-msvc
-            os: windows-2025
+            os: windows-2022
             wheel: cp311-win_amd64
     runs-on: ${{ matrix.os }}
     steps:

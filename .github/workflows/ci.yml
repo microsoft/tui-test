@@ -16,7 +16,7 @@ jobs:
         include:
           - os: macos-latest
             bin: target/debug/tui-test
-          - os: windows-2025
+          - os: windows-2022
             bin: target/debug/tui-test.exe
           - os: ubuntu-24.04
             bin: target/debug/tui-test
