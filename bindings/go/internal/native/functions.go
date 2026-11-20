@@ -2,77 +2,81 @@
 package native
 
 type nativeFunctionTable struct {
-	AbiVersion        func() uint32
-	GetViewport       func(abiString) *abiResult
-	Scroll            func(abiString, int32) *abiResult
-	ScrollToTop       func(abiString) *abiResult
-	ScrollToBottom    func(abiString) *abiResult
-	ResultFree        func(*abiResult)
-	Open              func(abiString, *abiOpenOptions) *abiResult
-	Run               func(abiString, *abiOpenOptions, abiString, *abiString, uintptr) *abiResult
-	Sessions          func() *abiResult
-	CloseAll          func() *abiResult
-	Recording         func(abiString) *abiResult
-	Close             func(abiString, abiOptionalBool) *abiResult
-	FinishTrace       func(abiString, bool) *abiResult
-	Interrupt         func(abiString) *abiResult
-	Restart           func(abiString, uint64) *abiResult
-	State             func(abiString) *abiResult
-	GetCommand        func(abiString) *abiResult
-	GetOutput         func(abiString) *abiResult
-	GetExitCode       func(abiString) *abiResult
-	GetCwd            func(abiString) *abiResult
-	GetCursor         func(abiString) *abiResult
-	GetModes          func(abiString) *abiResult
-	GetColors         func(abiString) *abiResult
-	ExpectMode        func(abiString, abiString, bool, abiOptionalU64) *abiResult
-	ExpectCursor      func(abiString, abiCursorExpectation) *abiResult
-	ExpectColors      func(abiString, abiColorExpectation) *abiResult
-	GetSize           func(abiString) *abiResult
-	GetTitle          func(abiString) *abiResult
-	GetClipboard      func(abiString) *abiResult
-	GetBellCount      func(abiString) *abiResult
-	GetBellEvents     func(abiString) *abiResult
-	StopRecording     func(abiString) *abiResult
-	PauseRecording    func(abiString) *abiResult
-	ResumeRecording   func(abiString) *abiResult
-	Text              func(abiString, bool) *abiResult
-	PackedScreen      func(abiString, bool) *abiResult
-	Cells             func(abiString, uint16, uint16, uint16, uint16) *abiResult
-	Write             func(abiString, abiString) *abiResult
-	Type              func(abiString, abiString) *abiResult
-	Submit            func(abiString, abiString) *abiResult
-	Signal            func(abiString, abiString) *abiResult
-	Key               func(abiString, *abiString, uintptr, uint32) *abiResult
-	Resize            func(abiString, uint16, uint16) *abiResult
-	MouseClick        func(abiString, abiOptionalU64, abiOptionalU64, abiString, abiMouseOptions, uint8) *abiResult
-	MouseMove         func(abiString, uint16, uint16) *abiResult
-	MouseDown         func(abiString, uint16, uint16, abiMouseOptions) *abiResult
-	MouseUp           func(abiString, uint16, uint16, abiMouseOptions) *abiResult
-	MouseDrag         func(abiString, uint16, uint16, uint16, uint16, abiMouseOptions) *abiResult
-	MouseScroll       func(abiString, abiString, uint16) *abiResult
-	WaitTitle         func(abiString, abiString, abiWaitOptions) *abiResult
-	GetProgressBar    func(abiString) *abiResult
-	WaitProgressBar   func(abiString, abiProgressBarMatch, abiOptionalU64) *abiResult
-	ExpectProgressBar func(abiString, abiProgressBarMatch, abiOptionalU64) *abiResult
-	ExpectTitle       func(abiString, abiString, abiWaitOptions) *abiResult
-	WaitClipboard     func(abiString, abiString, abiWaitOptions) *abiResult
-	WaitIdle          func(abiString, abiOptionalU64) *abiResult
-	WaitCommand       func(abiString, abiOptionalU64) *abiResult
-	WaitExit          func(abiString, abiOptionalU64) *abiResult
-	WaitReady         func(abiString, abiOptionalU64) *abiResult
-	WaitBell          func(abiString, abiOptionalU64) *abiResult
-	FindLocator       func(abiString, abiQuery, bool) *abiResult
-	WaitLocator       func(abiString, abiQuery, abiWaitOptions) *abiResult
-	ExpectLocator     func(abiString, abiQuery, abiWaitOptions) *abiResult
-	ClickLocator      func(abiString, abiQuery, abiMouseOptions, uint8, abiOptionalU64) *abiResult
-	HighlightLocator  func(abiString, abiQuery, abiOptionalU64) *abiResult
-	ExpectExitCode    func(abiString, int32, abiOptionalU64) *abiResult
-	ExpectOutput      func(abiString, abiString, bool) *abiResult
-	ExpectBellCount   func(abiString, uint64, abiOptionalU64) *abiResult
-	Snapshot          func(abiString, abiString, bool, bool, bool, abiString) *abiResult
-	Screenshot        func(abiString, *abiScreenshotOptions) *abiResult
-	StartRecording    func(abiString, abiRecordingOptions) *abiResult
+	AbiVersion          func() uint32
+	GetViewport         func(abiString) *abiResult
+	Scroll              func(abiString, int32) *abiResult
+	ScrollToTop         func(abiString) *abiResult
+	ScrollToBottom      func(abiString) *abiResult
+	ResultFree          func(*abiResult)
+	Open                func(abiString, *abiOpenOptions) *abiResult
+	Run                 func(abiString, *abiOpenOptions, abiString, *abiString, uintptr) *abiResult
+	Sessions            func() *abiResult
+	CloseAll            func() *abiResult
+	Recording           func(abiString) *abiResult
+	Close               func(abiString, abiOptionalBool) *abiResult
+	FinishTrace         func(abiString, bool) *abiResult
+	Interrupt           func(abiString) *abiResult
+	Restart             func(abiString, uint64) *abiResult
+	State               func(abiString) *abiResult
+	GetCommand          func(abiString) *abiResult
+	GetOutput           func(abiString) *abiResult
+	GetExitCode         func(abiString) *abiResult
+	GetCwd              func(abiString) *abiResult
+	GetCursor           func(abiString) *abiResult
+	GetModes            func(abiString) *abiResult
+	GetColors           func(abiString) *abiResult
+	ExpectMode          func(abiString, abiString, bool, abiOptionalU64) *abiResult
+	ExpectCursor        func(abiString, abiCursorExpectation) *abiResult
+	ExpectColors        func(abiString, abiColorExpectation) *abiResult
+	GetSize             func(abiString) *abiResult
+	GetTitle            func(abiString) *abiResult
+	GetClipboard        func(abiString) *abiResult
+	GetBellCount        func(abiString) *abiResult
+	GetBellEvents       func(abiString) *abiResult
+	StopRecording       func(abiString) *abiResult
+	PauseRecording      func(abiString) *abiResult
+	ResumeRecording     func(abiString) *abiResult
+	Text                func(abiString, bool) *abiResult
+	PackedScreen        func(abiString, bool) *abiResult
+	Cells               func(abiString, uint16, uint16, uint16, uint16) *abiResult
+	Write               func(abiString, abiString) *abiResult
+	Type                func(abiString, abiString) *abiResult
+	Submit              func(abiString, abiString) *abiResult
+	Signal              func(abiString, abiString) *abiResult
+	Key                 func(abiString, *abiString, uintptr, uint32) *abiResult
+	Resize              func(abiString, uint16, uint16) *abiResult
+	MouseClick          func(abiString, abiOptionalU64, abiOptionalU64, abiString, abiMouseOptions, uint8) *abiResult
+	MouseMove           func(abiString, uint16, uint16) *abiResult
+	MouseDown           func(abiString, uint16, uint16, abiMouseOptions) *abiResult
+	MouseUp             func(abiString, uint16, uint16, abiMouseOptions) *abiResult
+	MouseDrag           func(abiString, uint16, uint16, uint16, uint16, abiMouseOptions) *abiResult
+	MouseScroll         func(abiString, abiString, uint16) *abiResult
+	WaitTitle           func(abiString, abiString, abiWaitOptions) *abiResult
+	GetProgressBar      func(abiString) *abiResult
+	GetProgramStatuses  func(abiString) *abiResult
+	GetProgramStatus    func(abiString, abiString) *abiResult
+	WaitProgramStatus   func(abiString, abiProgramStatusMatch, abiOptionalU64) *abiResult
+	ExpectProgramStatus func(abiString, abiProgramStatusMatch, abiOptionalU64) *abiResult
+	WaitProgressBar     func(abiString, abiProgressBarMatch, abiOptionalU64) *abiResult
+	ExpectProgressBar   func(abiString, abiProgressBarMatch, abiOptionalU64) *abiResult
+	ExpectTitle         func(abiString, abiString, abiWaitOptions) *abiResult
+	WaitClipboard       func(abiString, abiString, abiWaitOptions) *abiResult
+	WaitIdle            func(abiString, abiOptionalU64) *abiResult
+	WaitCommand         func(abiString, abiOptionalU64) *abiResult
+	WaitExit            func(abiString, abiOptionalU64) *abiResult
+	WaitReady           func(abiString, abiOptionalU64) *abiResult
+	WaitBell            func(abiString, abiOptionalU64) *abiResult
+	FindLocator         func(abiString, abiQuery, bool) *abiResult
+	WaitLocator         func(abiString, abiQuery, abiWaitOptions) *abiResult
+	ExpectLocator       func(abiString, abiQuery, abiWaitOptions) *abiResult
+	ClickLocator        func(abiString, abiQuery, abiMouseOptions, uint8, abiOptionalU64) *abiResult
+	HighlightLocator    func(abiString, abiQuery, abiOptionalU64) *abiResult
+	ExpectExitCode      func(abiString, int32, abiOptionalU64) *abiResult
+	ExpectOutput        func(abiString, abiString, bool) *abiResult
+	ExpectBellCount     func(abiString, uint64, abiOptionalU64) *abiResult
+	Snapshot            func(abiString, abiString, bool, bool, bool, abiString) *abiResult
+	Screenshot          func(abiString, *abiScreenshotOptions) *abiResult
+	StartRecording      func(abiString, abiRecordingOptions) *abiResult
 }
 
 func nativeRegistrations(table *nativeFunctionTable) []nativeRegistration {
@@ -128,6 +132,10 @@ func nativeRegistrations(table *nativeFunctionTable) []nativeRegistration {
 		{symbol: "tui_mouse_scroll", target: &table.MouseScroll},
 		{symbol: "tui_wait_title", target: &table.WaitTitle},
 		{symbol: "tui_get_progress_bar", target: &table.GetProgressBar},
+		{symbol: "tui_get_program_statuses", target: &table.GetProgramStatuses},
+		{symbol: "tui_get_program_status", target: &table.GetProgramStatus},
+		{symbol: "tui_wait_program_status", target: &table.WaitProgramStatus},
+		{symbol: "tui_expect_program_status", target: &table.ExpectProgramStatus},
 		{symbol: "tui_wait_progress_bar", target: &table.WaitProgressBar},
 		{symbol: "tui_expect_progress_bar", target: &table.ExpectProgressBar},
 		{symbol: "tui_expect_title", target: &table.ExpectTitle},

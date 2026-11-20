@@ -89,6 +89,10 @@ pub(crate) fn diagnostic_operation_name(operation: &Operation) -> &'static str {
         Operation::GetClipboard => "get.clipboard",
         Operation::GetBellCount => "get.bell_count",
         Operation::GetProgressBar => "get.progress_bar",
+        Operation::GetProgramStatuses => "get.program_statuses",
+        Operation::GetProgramStatus { .. } => "get.program_status",
+        Operation::WaitProgramStatus { .. } => "wait.program_status",
+        Operation::ExpectProgramStatus { .. } => "expect.program_status",
         Operation::WaitProgressBar { .. } => "wait.progress_bar",
         Operation::ExpectProgressBar { .. } => "expect.progress_bar",
         Operation::GetBellEvents => "get.bell_events",
@@ -131,6 +135,8 @@ pub(crate) fn diagnostic_operation_name(operation: &Operation) -> &'static str {
 pub(crate) fn operation_timeout(operation: &Operation) -> Option<u64> {
     match operation {
         Operation::WaitTitle { timeout_ms, .. }
+        | Operation::WaitProgramStatus { timeout_ms, .. }
+        | Operation::ExpectProgramStatus { timeout_ms, .. }
         | Operation::WaitProgressBar { timeout_ms, .. }
         | Operation::ExpectProgressBar { timeout_ms, .. }
         | Operation::WaitClipboard { timeout_ms }

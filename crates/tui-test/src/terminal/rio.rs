@@ -15,6 +15,7 @@ use rio_vt::crosswords::{Crosswords, CrosswordsSize, Mode};
 use rio_vt::event::{EventListener, RioEvent, WindowId};
 use rio_vt::performer::handler::Processor;
 
+use crate::api::{ProgramState, ProgramStatus, ProgramStatusKind};
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{
@@ -24,6 +25,7 @@ use crate::terminal::emu::{
     Clipboard, ClipboardType, ClipboardValidator, CursorShape, CursorStyle, Emulator, KeyboardMode,
     TerminalMode,
 };
+use crate::terminal::program_status::ProgramStatuses;
 
 fn clipboard_type(clipboard: RioClipboardType) -> ClipboardType {
     match clipboard {
@@ -197,6 +199,7 @@ struct CaptureProxy {
     clipboard: Arc<Mutex<Clipboard>>,
     bells: BellTracker,
     progress: Arc<Mutex<crate::api::ProgressBar>>,
+    program_statuses: Arc<Mutex<ProgramStatuses>>,
 }
 
 impl EventListener for CaptureProxy {
@@ -246,6 +249,44 @@ impl EventListener for CaptureProxy {
                     .unwrap_or_else(PoisonError::into_inner)
                     .update(state, report.progress);
             }
+            RioEvent::ProgramStatus(event) => {
+                use rio_vt::event::{BlockedKind, ProgramState as Native, ProgramStatusEvent};
+                let mut statuses = self
+                    .program_statuses
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                match event {
+                    ProgramStatusEvent::Reset => statuses.clear(""),
+                    ProgramStatusEvent::PromptStart => statuses.finish_process(),
+                    ProgramStatusEvent::Report(report) => {
+                        let id = report.id.unwrap_or_default();
+                        let state = match report.state {
+                            Native::Idle => ProgramState::Idle,
+                            Native::Working => ProgramState::Working,
+                            Native::Done => ProgramState::Done,
+                            Native::Blocked => ProgramState::Blocked,
+                            Native::Error => ProgramState::Error,
+                            Native::Clear => {
+                                statuses.clear(&id);
+                                return;
+                            }
+                        };
+                        statuses.update(ProgramStatus {
+                            id,
+                            state,
+                            kind: report.kind.map(|kind| match kind {
+                                BlockedKind::Permission => ProgramStatusKind::Permission,
+                                BlockedKind::Question => ProgramStatusKind::Question,
+                                BlockedKind::Auth => ProgramStatusKind::Auth,
+                            }),
+                            app: report.app,
+                            title: report.title,
+                            message: report.msg,
+                            progress: report.progress,
+                        });
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -262,6 +303,7 @@ impl CaptureProxy {
 
 pub struct RioEmu {
     progress: Arc<Mutex<crate::api::ProgressBar>>,
+    program_statuses: Arc<Mutex<ProgramStatuses>>,
     term: Crosswords<CaptureProxy>,
     processor: Processor,
     pending: Arc<Mutex<Vec<u8>>>,
@@ -289,12 +331,14 @@ impl RioEmu {
         let colors = ColorState::new(profile);
         let clipboard = Arc::new(Mutex::new(Clipboard::default()));
         let progress = Arc::new(Mutex::new(crate::api::ProgressBar::default()));
+        let program_statuses = Arc::new(Mutex::new(ProgramStatuses::default()));
         let proxy = CaptureProxy {
             pending: Arc::clone(&pending),
             colors: colors.clone(),
             clipboard: Arc::clone(&clipboard),
             bells,
             progress: Arc::clone(&progress),
+            program_statuses: Arc::clone(&program_statuses),
         };
         Self {
             term: Crosswords::new(
@@ -310,6 +354,7 @@ impl RioEmu {
             colors,
             clipboard,
             progress,
+            program_statuses,
             clipboard_validator: ClipboardValidator::new(),
             cols,
             rows,
@@ -335,6 +380,22 @@ impl RioEmu {
 }
 
 impl Emulator for RioEmu {
+    fn program_statuses(&self) -> Option<Vec<ProgramStatus>> {
+        Some(
+            self.program_statuses
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .all(),
+        )
+    }
+
+    fn finish_process(&mut self) {
+        self.program_statuses
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .finish_process();
+    }
+
     fn progress_bar(&self) -> Option<crate::api::ProgressBar> {
         Some(*self.progress.lock().unwrap_or_else(PoisonError::into_inner))
     }

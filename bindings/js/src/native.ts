@@ -9,6 +9,7 @@ import type {
   BellEvent,
   ProgressBar,
   ProgressBarMatch,
+  ProgramStatusMatch,
   Cell,
   ClipboardWaitOptions,
   Cursor,
@@ -354,6 +355,22 @@ export class NativeRuntime {
 
   getProgressBar(): Promise<ProgressBar> {
     return this.#call((session) => session.getProgressBar());
+  }
+
+  getProgramStatuses(): Promise<import("./types.js").ProgramStatus[]> {
+    return this.#call((session) => session.getProgramStatuses());
+  }
+
+  getProgramStatus(id: string): Promise<import("./types.js").ProgramStatus | null> {
+    return this.#call((session) => session.getProgramStatus(id));
+  }
+
+  waitProgramStatus(expected: import("./types.js").ProgramStatusMatch, timeoutMs?: number): Promise<void> {
+    return this.#call((session) => session.waitProgramStatus({ ...expected, id: expected.id ?? "" } as ProgramStatusMatch, timeoutMs));
+  }
+
+  expectProgramStatus(expected: import("./types.js").ProgramStatusMatch, timeoutMs?: number): Promise<void> {
+    return this.#call((session) => session.expectProgramStatus({ ...expected, id: expected.id ?? "" } as ProgramStatusMatch, timeoutMs));
   }
 
   waitProgressBar(expected: import("./types.js").ProgressBarMatch, timeoutMs?: number): Promise<void> {

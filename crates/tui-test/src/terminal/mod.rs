@@ -12,6 +12,8 @@ pub mod emu;
 pub mod ghostty;
 pub mod integration;
 pub mod locator;
+#[cfg(any(feature = "ghostty", feature = "rio"))]
+mod program_status;
 pub mod pty;
 #[cfg(feature = "rio")]
 pub mod rio;

@@ -278,6 +278,14 @@ impl Emulator for GhosttyEmu {
         self.call("draining replies", GhosttyCore::take_pending_writes)
     }
 
+    fn program_statuses(&self) -> Option<Vec<crate::api::ProgramStatus>> {
+        Some(self.call("reading program status", |core| core.program_statuses()))
+    }
+
+    fn finish_process(&mut self) {
+        self.call("finishing program status", GhosttyCore::finish_process);
+    }
+
     fn encode_key(&self, press: &KeyPress) -> Option<Vec<u8>> {
         // The worker owns the terminal, so the event has to be moved across
         // the channel rather than borrowed.

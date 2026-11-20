@@ -72,7 +72,30 @@ export interface ProgressBarMatch {
   progress?: number;
 }
 
-export type State = Omit<NativeState, "progress_bar"> & { progress_bar: ProgressBar | null };
+export type ProgramState = "idle" | "working" | "done" | "blocked" | "error";
+export type ProgramStatusKind = "permission" | "question" | "auth";
+export interface ProgramStatus {
+  id: string;
+  state: ProgramState;
+  app: string | null;
+  title: string | null;
+  message: string | null;
+  kind: ProgramStatusKind | null;
+  progress: number | null;
+}
+export interface ProgramStatusMatch {
+  id?: string;
+  state?: ProgramState;
+  app?: string;
+  title?: string;
+  message?: string;
+  kind?: ProgramStatusKind;
+  progress?: number;
+}
+export type State = Omit<NativeState, "progress_bar" | "program_statuses"> & {
+  progress_bar: ProgressBar | null;
+  program_statuses: ProgramStatus[] | null;
+};
 
 export type TextMatch = NativeTextMatch;
 

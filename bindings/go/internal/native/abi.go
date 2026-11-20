@@ -6,7 +6,7 @@ import (
 	"unsafe"
 )
 
-const abiVersion = 11
+const abiVersion = 12
 
 type abiString struct {
 	_    structs.HostLayout
@@ -33,6 +33,11 @@ type abiOptionalF64 struct {
 	present bool
 	value   float64
 }
+type abiOptionalProgramStatus struct {
+	_       structs.HostLayout
+	present bool
+	value   abiProgramStatus
+}
 type abiPair struct {
 	_     structs.HostLayout
 	key   abiString
@@ -56,33 +61,36 @@ type abiColor struct {
 	blue  uint8
 }
 type abiResult struct {
-	_             structs.HostLayout
-	modes         *abiMode
-	modesLen      uintptr
-	colors        abiTerminalColors
-	errorKind     uint32
-	errorMessage  abiString
-	errorDetails  abiString
-	errorArtifact abiString
-	text          abiString
-	number        uint64
-	exitCode      abiOptionalI32
-	open          abiOpenResult
-	state         abiState
-	progressBar   abiProgressBar
-	cursor        abiCursor
-	size          abiSize
-	viewport      abiViewport
-	cells         *abiCell
-	cellsLen      uintptr
-	matches       *abiMatch
-	matchesLen    uintptr
-	bells         *abiBellEvent
-	bellsLen      uintptr
-	strings       *abiString
-	stringsLen    uintptr
-	snapshot      uint32
-	privateData   unsafe.Pointer
+	_                  structs.HostLayout
+	modes              *abiMode
+	modesLen           uintptr
+	colors             abiTerminalColors
+	errorKind          uint32
+	errorMessage       abiString
+	errorDetails       abiString
+	errorArtifact      abiString
+	text               abiString
+	number             uint64
+	exitCode           abiOptionalI32
+	open               abiOpenResult
+	state              abiState
+	progressBar        abiProgressBar
+	programStatus      abiOptionalProgramStatus
+	programStatuses    *abiProgramStatus
+	programStatusesLen uintptr
+	cursor             abiCursor
+	size               abiSize
+	viewport           abiViewport
+	cells              *abiCell
+	cellsLen           uintptr
+	matches            *abiMatch
+	matchesLen         uintptr
+	bells              *abiBellEvent
+	bellsLen           uintptr
+	strings            *abiString
+	stringsLen         uintptr
+	snapshot           uint32
+	privateData        unsafe.Pointer
 }
 type abiOptionalProgressBar struct {
 	_       structs.HostLayout
@@ -124,27 +132,39 @@ type abiProgressBar struct {
 	state    abiString
 	progress abiOptionalU64
 }
+type abiProgramStatus struct {
+	_        structs.HostLayout
+	id       abiString
+	state    abiString
+	app      abiString
+	title    abiString
+	message  abiString
+	kind     abiString
+	progress abiOptionalU64
+}
 type abiState struct {
-	_            structs.HostLayout
-	progressBar  abiOptionalProgressBar
-	sessionShell abiString
-	cols         uint16
-	rows         uint16
-	cursor       abiCursor
-	title        abiString
-	cwd          abiString
-	lastCommand  abiString
-	lastExit     abiOptionalI32
-	exitSignal   abiString
-	exited       abiOptionalI32
-	ready        bool
-	bellCount    uint64
-	modes        *abiMode
-	modesLen     uintptr
-	mouseMode    abiString
-	colors       abiTerminalColors
-	timeouts     abiTimeouts
-	text         abiString
+	_                  structs.HostLayout
+	programStatuses    *abiProgramStatus
+	programStatusesLen uintptr
+	progressBar        abiOptionalProgressBar
+	sessionShell       abiString
+	cols               uint16
+	rows               uint16
+	cursor             abiCursor
+	title              abiString
+	cwd                abiString
+	lastCommand        abiString
+	lastExit           abiOptionalI32
+	exitSignal         abiString
+	exited             abiOptionalI32
+	ready              bool
+	bellCount          uint64
+	modes              *abiMode
+	modesLen           uintptr
+	mouseMode          abiString
+	colors             abiTerminalColors
+	timeouts           abiTimeouts
+	text               abiString
 }
 type abiTerminalColors struct {
 	_          structs.HostLayout
@@ -296,6 +316,16 @@ type abiWaitOptions struct {
 type abiProgressBarMatch struct {
 	_        structs.HostLayout
 	state    abiString
+	progress abiOptionalU64
+}
+type abiProgramStatusMatch struct {
+	_        structs.HostLayout
+	id       abiString
+	state    abiString
+	app      abiString
+	title    abiString
+	message  abiString
+	kind     abiString
 	progress abiOptionalU64
 }
 type abiRecordingOptions struct {

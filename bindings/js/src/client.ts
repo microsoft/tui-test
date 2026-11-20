@@ -26,6 +26,8 @@ import type {
   BellEvent,
   ProgressBar,
   ProgressBarMatch,
+  ProgramStatus,
+  ProgramStatusMatch,
   Cell,
   ClientOptions,
   Cursor,
@@ -1052,6 +1054,26 @@ export class TuiTest {
 
   async getProgressBar(): Promise<ProgressBar> {
     return this.#runtime.getProgressBar();
+  }
+
+  async getProgramStatuses(): Promise<ProgramStatus[]> {
+    return this.#runtime.getProgramStatuses();
+  }
+
+  async getProgramStatus(id = ""): Promise<ProgramStatus | null> {
+    return this.#runtime.getProgramStatus(id);
+  }
+
+  async waitProgramStatus(expected: ProgramStatusMatch = {}, opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("wait.program_status", () =>
+      this.#runtime.waitProgramStatus(expected, this.#timeout("text", opts.timeout)),
+    );
+  }
+
+  async expectProgramStatus(expected: ProgramStatusMatch = {}, opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("expect.program_status", () =>
+      this.#runtime.expectProgramStatus(expected, this.#timeout("text", opts.timeout)),
+    );
   }
 
   async waitProgressBar(expected: ProgressBarMatch = {}, opts: { timeout?: number } = {}): Promise<void> {

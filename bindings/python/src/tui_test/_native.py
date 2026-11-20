@@ -151,7 +151,8 @@ def _copy(value):
             continue
         item = getattr(value, name)
         if name + "_len" in fields:
-            item = [_copy(item[index]) for index in range(getattr(value, name + "_len"))]
+            item = (None if name == "program_statuses" and not item else
+                    [_copy(item[index]) for index in range(getattr(value, name + "_len"))])
         elif isinstance(item, C.Structure):
             item = _copy(item)
         result["char" if name == "character" else name] = item
@@ -168,7 +169,7 @@ def _result(result, kind):
     if kind == "packed":
         return (memoryview(C.string_at(result.text.data, result.text.len)),
                 result.size.cols, result.size.rows)
-    if kind in ("cells", "matches", "bells", "strings", "modes"):
+    if kind in ("cells", "matches", "bells", "strings", "modes", "program_statuses"):
         values = getattr(result, kind)
         copied = [_copy(values[index]) for index in range(getattr(result, kind + "_len"))]
         return {entry["name"]: entry["enabled"] for entry in copied} if kind == "modes" else copied
@@ -473,6 +474,28 @@ class NativeSession:
 
     async def get_progress_bar(self):
         return await self._call("get_progress_bar", kind="progress_bar")
+
+    async def get_program_statuses(self):
+        return await self._call("get_program_statuses", kind="program_statuses")
+
+    async def get_program_status(self, id):
+        return await self._call("get_program_status", _string(id), kind="program_status")
+
+    @staticmethod
+    def _program_status_match(expected):
+        return abi.TuiProgramStatusMatch(
+            id=_string(expected.id), state=_string(expected.state),
+            app=_string(expected.app), title=_string(expected.title),
+            message=_string(expected.message), kind=_string(expected.kind),
+            progress=_optional(expected.progress, "progress", 8))
+
+    async def wait_program_status(self, expected, timeout_ms):
+        return await self._call("wait_program_status", self._program_status_match(expected),
+                                _optional(timeout_ms))
+
+    async def expect_program_status(self, expected, timeout_ms):
+        return await self._call("expect_program_status", self._program_status_match(expected),
+                                _optional(timeout_ms))
 
     async def wait_progress_bar(self, state, progress, timeout_ms):
         expected = abi.TuiProgressBarMatch(

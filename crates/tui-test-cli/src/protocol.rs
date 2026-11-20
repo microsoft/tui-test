@@ -10,7 +10,7 @@ use tui_test::{
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "tui_test::ScrollTarget")]
@@ -130,6 +130,19 @@ pub enum Request {
     },
     WaitProgressBar {
         expected: tui_test::api::ProgressBarMatch,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    GetProgramStatus {
+        id: String,
+    },
+    WaitProgramStatus {
+        expected: tui_test::api::ProgramStatusMatch,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    ExpectProgramStatus {
+        expected: tui_test::api::ProgramStatusMatch,
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
@@ -332,6 +345,8 @@ impl Request {
             | Self::WaitLocator { .. }
             | Self::WaitClipboard { .. }
             | Self::WaitProgressBar { .. }
+            | Self::WaitProgramStatus { .. }
+            | Self::ExpectProgramStatus { .. }
             | Self::ExpectProgressBar { .. }
             | Self::WaitIdle { .. }
             | Self::WaitCommand { .. }
@@ -400,6 +415,7 @@ impl Request {
                 GetField::Title => "get.title",
                 GetField::Clipboard => "get.clipboard",
                 GetField::ProgressBar => "get.progress_bar",
+                GetField::ProgramStatuses => "get.program_statuses",
                 GetField::BellCount => "get.bell_count",
                 GetField::BellEvents => "get.bell_events",
             },
@@ -414,6 +430,9 @@ impl Request {
             Self::WaitClipboard { text: Some(_), .. } => "wait.clipboard_match",
             Self::WaitClipboard { .. } => "wait.clipboard",
             Self::WaitProgressBar { .. } => "wait.progress_bar",
+            Self::GetProgramStatus { .. } => "get.program_status",
+            Self::WaitProgramStatus { .. } => "wait.program_status",
+            Self::ExpectProgramStatus { .. } => "expect.program_status",
             Self::ExpectProgressBar { .. } => "expect.progress_bar",
             Self::WaitIdle { .. } => "wait.idle",
             Self::WaitCommand { .. } => "wait.command",
@@ -579,6 +598,7 @@ impl Request {
                 GetField::Title => Operation::GetTitle,
                 GetField::Clipboard => Operation::GetClipboard,
                 GetField::ProgressBar => Operation::GetProgressBar,
+                GetField::ProgramStatuses => Operation::GetProgramStatuses,
                 GetField::BellCount => Operation::GetBellCount,
                 GetField::BellEvents => Operation::GetBellEvents,
             }),
@@ -626,6 +646,21 @@ impl Request {
                 None => Ok(Operation::WaitClipboard { timeout_ms }),
             },
             Request::WaitIdle { timeout_ms } => Ok(Operation::WaitIdle { timeout_ms }),
+            Request::GetProgramStatus { id } => Ok(Operation::GetProgramStatus { id }),
+            Request::WaitProgramStatus {
+                expected,
+                timeout_ms,
+            } => Ok(Operation::WaitProgramStatus {
+                expected,
+                timeout_ms,
+            }),
+            Request::ExpectProgramStatus {
+                expected,
+                timeout_ms,
+            } => Ok(Operation::ExpectProgramStatus {
+                expected,
+                timeout_ms,
+            }),
             Request::WaitCommand { timeout_ms } => Ok(Operation::WaitCommand { timeout_ms }),
             Request::WaitExit { timeout_ms } => Ok(Operation::WaitExit { timeout_ms }),
             Request::WaitReady { timeout_ms } => Ok(Operation::WaitReady { timeout_ms }),
@@ -793,6 +828,7 @@ impl Request {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GetField {
+    ProgramStatuses,
     ProgressBar,
     Viewport,
     Command,
@@ -902,6 +938,8 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
         OperationResult::Title(value) => Ok(json!({ "value": value })),
         OperationResult::Clipboard(value) => Ok(json!({ "value": value })),
         OperationResult::ProgressBar(value) => Ok(json!({ "value": value })),
+        OperationResult::ProgramStatuses(value) => Ok(json!({ "value": value })),
+        OperationResult::ProgramStatus(value) => Ok(json!({ "value": value })),
         OperationResult::Cursor(value) => Ok(json!({ "value": value })),
         OperationResult::Viewport(value) => Ok(json!({ "value": value })),
         OperationResult::Modes(value) => Ok(json!({ "modes": value })),

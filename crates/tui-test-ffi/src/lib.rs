@@ -15,7 +15,7 @@ pub use types::*;
 mod tasks_generated;
 pub use tasks_generated::*;
 
-pub const ABI_VERSION: u32 = 11;
+pub const ABI_VERSION: u32 = 12;
 
 type Result<T> = std::result::Result<T, TuiTestError>;
 fn boundary(f: impl FnOnce() -> Result<OperationResult>) -> *mut TuiResult {
@@ -713,6 +713,98 @@ unsafe fn progress_bar_match(value: TuiProgressBarMatch) -> Result<ProgressBarMa
         })
         .transpose()?;
     Ok(ProgressBarMatch { state, progress })
+}
+
+unsafe fn program_status_match(value: TuiProgramStatusMatch) -> Result<ProgramStatusMatch> {
+    unsafe fn enumeration<T: serde::de::DeserializeOwned>(value: TuiString) -> Result<Option<T>> {
+        unsafe { value.optional()? }
+            .map(|value| {
+                serde_json::from_value(serde_json::Value::String(value))
+                    .map_err(|error| TuiTestError::usage(error.to_string()))
+            })
+            .transpose()
+    }
+    let expected = ProgramStatusMatch {
+        id: unsafe { value.id.optional()? }.unwrap_or_default(),
+        state: unsafe { enumeration(value.state)? },
+        app: unsafe { value.app.optional()? },
+        title: unsafe { value.title.optional()? },
+        message: unsafe { value.message.optional()? },
+        kind: unsafe { enumeration(value.kind)? },
+        progress: value
+            .progress
+            .option()
+            .map(|value| {
+                u8::try_from(value)
+                    .map_err(|_| TuiTestError::usage("progress must be between 0 and 100"))
+            })
+            .transpose()?,
+    };
+    expected.validate()?;
+    Ok(expected)
+}
+
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_get_program_statuses(session: TuiString) -> *mut TuiResult {
+    unsafe {
+        execute(session, "getProgramStatuses", || {
+            Ok(Operation::GetProgramStatuses)
+        })
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_get_program_status(
+    session: TuiString,
+    id: TuiString,
+) -> *mut TuiResult {
+    unsafe {
+        execute(session, "getProgramStatus", || {
+            Ok(Operation::GetProgramStatus {
+                id: id.optional()?.unwrap_or_default(),
+            })
+        })
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_wait_program_status(
+    session: TuiString,
+    expected: TuiProgramStatusMatch,
+    timeout_ms: TuiOptionalU64,
+) -> *mut TuiResult {
+    unsafe {
+        execute(session, "wait.program_status", || {
+            Ok(Operation::WaitProgramStatus {
+                expected: program_status_match(expected)?,
+                timeout_ms: timeout_ms.option(),
+            })
+        })
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_expect_program_status(
+    session: TuiString,
+    expected: TuiProgramStatusMatch,
+    timeout_ms: TuiOptionalU64,
+) -> *mut TuiResult {
+    unsafe {
+        execute(session, "expect.program_status", || {
+            Ok(Operation::ExpectProgramStatus {
+                expected: program_status_match(expected)?,
+                timeout_ms: timeout_ms.option(),
+            })
+        })
+    }
 }
 
 #[no_mangle]
