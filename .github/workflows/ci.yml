@@ -16,9 +16,9 @@ jobs:
         include:
           - os: macos-latest
             bin: target/debug/tui-test
-          - os: windows-latest
+          - os: windows-2022
             bin: target/debug/tui-test.exe
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             bin: target/debug/tui-test
     runs-on: ${{ matrix.os }}
     env:
@@ -222,7 +222,7 @@ jobs:
 
   compatibility:
     name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
