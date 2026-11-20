@@ -83,7 +83,7 @@ library. The loader checks the ABI version before the first operation.
 
 ### Build from source
 
-Install Rust 1.90 or later and the build dependencies for the supported terminal
+Install Rust 1.96 or later and the build dependencies for the supported terminal
 backends. Build a wheel with the standard Python build frontend:
 
 ```sh

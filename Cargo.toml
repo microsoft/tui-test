@@ -14,13 +14,13 @@ resolver = "2"
 [workspace.package]
 version = "0.1.1"
 edition = "2021"
-rust-version = "1.90"
+rust-version = "1.96"
 license = "MIT"
 repository = "https://github.com/microsoft/tui-test"
 
 [workspace.dependencies]
 alacritty_terminal = "0.26.0"
-rio-vt = "0.5.3"
+rio-vt = "0.5.29"
 anyhow = "1.0.102"
 base64 = "0.22.1"
 bitflags = "2.13.1"
@@ -34,7 +34,7 @@ fontdb = { version = "0.23.0", default-features = false, features = ["fs", "std"
 gif = "0.14.0"
 interprocess = "2.4.2"
 rquickjs = { version = "0.12.2", features = ["parallel"] }
-ghostty-vt = { package = "libghostty-vt", version = "0.2.1", git = "https://github.com/Uzaaft/libghostty-rs.git", rev = "a28e4ad00d6ba79b98b8cac651ed8976d8500903", default-features = false }
+ghostty-vt = { package = "libghostty-vt", version = "0.2.1", git = "https://github.com/Uzaaft/libghostty-rs.git", rev = "635b1cc037e66ebb83c9fa39db782b77cd15014d", default-features = false }
 png = "0.17.16"
 portable-pty = "0.9.0"
 regex = "1.12.4"
