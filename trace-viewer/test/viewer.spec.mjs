@@ -317,6 +317,166 @@ test("zoom and responsive fit retain the same cell hit testing and crop", async 
   }
 });
 
+for (const colorScheme of ["dark", "light"]) {
+  test(`the ${colorScheme} workbench keeps controls and evidence usable on narrow screens`, async ({ page, openReport }) => {
+    const data = fixture();
+    data.details.runtime.session_name = "deployment-wizard-".repeat(20);
+    data.timeline.frames[2].size = { cols: 80, rows: 24 };
+    data.timeline.frames[2].svg = '<svg xmlns="http://www.w3.org/2000/svg" width="814" height="502"><rect width="100%" height="100%" fill="#112233"/></svg>';
+    await page.emulateMedia({ colorScheme });
+    await openReport(data);
+    for (const viewport of [{ width: 1280, height: 900 }, { width: 1280, height: 600 }, { width: 800, height: 720 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      for (const id of ["failure", "zoom", "play", "frame-slider", "cell-tab"]) {
+        await page.locator(`#${id}`).scrollIntoViewIfNeeded();
+        await expect(page.locator(`#${id}`)).toBeInViewport();
+      }
+      const screen = await page.locator("#terminal").boundingBox();
+      expect(screen.width).toBeGreaterThan(0);
+      expect(screen.height).toBeGreaterThan(0);
+      await page.locator("#action-filter").scrollIntoViewIfNeeded();
+      await expect(page.locator("#action-filter")).toBeInViewport();
+      if (viewport.width < 600) {
+        const navigation = await page.locator(".sidebar").boundingBox();
+        const viewer = await page.locator(".viewer").boundingBox();
+        expect(navigation.y + navigation.height).toBeLessThanOrEqual(viewer.y);
+      }
+      await page.locator("#zoom").selectOption("1.5");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.locator("#zoom").selectOption("fit");
+      await page.locator("#terminal").focus();
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("Enter");
+      await expect(page.locator("#cell-panel")).toBeVisible();
+      await expect(page.locator("#cell-heading")).toContainText("Column");
+      await page.locator("#failure").click();
+      await expect(page.locator("#errors-panel")).toBeVisible();
+    }
+  });
+}
+
+test("the header wordmark is vertically centered with the logo and neighboring text", async ({ page, openReport }) => {
+  await openReport();
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const selector = width > 600
+      ? ".brand-mark, .brand strong, .brand > div > span, #session-summary .metadata-label, #session-summary .metadata-value, #failure"
+      : ".brand-mark, .brand strong, #failure";
+    const centers = await page.locator(selector).evaluateAll((elements) => elements.map((element) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.y + bounds.height / 2;
+    }));
+    expect(Math.max(...centers) - Math.min(...centers)).toBeLessThan(.5);
+  }
+});
+
+test("action names, descriptions, locators and durations stay on a single line", async ({ page, openReport }) => {
+  await openReport();
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const rows = await page.locator("#points .point").evaluateAll((points) => points.map((point) => {
+      const name = point.querySelector(".name").getBoundingClientRect();
+      const label = point.querySelector(".query-code, .description").getBoundingClientRect();
+      const result = point.querySelector(".result").getBoundingClientRect();
+      return {
+        sameLine: name.top < label.bottom && label.top < name.bottom,
+        resultFits: result.height <= Math.max(name.height, label.height) + 1,
+      };
+    }));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.sameLine && row.resultFits)).toBe(true);
+  }
+});
+
+test("dragging the details divider expands the panel without changing cell inspection", async ({ page, openReport }) => {
+  await openReport();
+  await clickCell(page, 1, 0);
+  const divider = page.getByRole("separator", { name: "Resize action details" });
+  const details = page.locator(".details-panel");
+  const original = await details.boundingBox();
+  const handle = await divider.boundingBox();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 30, handle.y + handle.height / 2 - 170, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await details.boundingBox()).height).toBeCloseTo(original.height + 170, 0);
+  await expect(page.locator("#cell-panel")).toBeVisible();
+  await expect(page.locator("#cell-heading")).toHaveText("Column 1, row 0");
+  await clickCell(page, 2, 0);
+  await expect(page.locator("#cell-heading")).toHaveText("Column 2, row 0 / continuation");
+  await page.mouse.move(20, 20);
+  expect((await details.boundingBox()).height).toBeCloseTo(original.height + 170, 0);
+  await page.locator("#call-tab").click();
+  expect((await details.boundingBox()).height).toBeCloseTo(original.height + 170, 0);
+});
+
+test("the details divider supports keyboard limits and reclamps when the window shrinks", async ({ page, openReport }) => {
+  await openReport();
+  const divider = page.getByRole("separator", { name: "Resize action details" });
+  const details = page.locator(".details-panel");
+  const original = (await details.boundingBox()).height;
+  await divider.focus();
+  await page.keyboard.press("ArrowUp");
+  await expect.poll(async () => (await details.boundingBox()).height).toBeCloseTo(original + 24, 0);
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(async () => (await details.boundingBox()).height).toBeCloseTo(original, 0);
+  await page.keyboard.press("End");
+  await expect.poll(async () => divider.getAttribute("aria-valuenow")).toBe(await divider.getAttribute("aria-valuemax"));
+  await page.setViewportSize({ width: 800, height: 720 });
+  await expect.poll(async () => {
+    const panel = await details.boundingBox();
+    const main = await page.locator("main").boundingBox();
+    return panel.y + panel.height <= main.y + main.height + 1;
+  }).toBe(true);
+  expect((await page.locator("#terminal").boundingBox()).height).toBeGreaterThan(0);
+  await page.keyboard.press("Home");
+  await expect.poll(async () => divider.getAttribute("aria-valuenow")).toBe(await divider.getAttribute("aria-valuemin"));
+  await expect(divider).toBeFocused();
+});
+
+test("maximizing details keeps fallback evidence and controls visible as frame content changes", async ({ page, openReport }) => {
+  const data = fixture();
+  delete data.timeline.frames[2].svg;
+  data.timeline.frames[2].grid = [];
+  data.timeline.frames[2].cells = [];
+  data.timeline.frames[2].omission = "Screen exceeds the byte limit";
+  await page.setViewportSize({ width: 320, height: 900 });
+  await openReport(data);
+  const divider = page.getByRole("separator", { name: "Resize action details" });
+  const details = page.locator(".details-panel");
+
+  async function evidenceFits() {
+    return page.locator(".viewer").evaluate((viewer) => {
+      const viewport = viewer.querySelector("#viewport").getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(viewer.querySelector("#screen-text"));
+      const text = range.getBoundingClientRect();
+      const controls = viewer.querySelector(".frame-controls").getBoundingClientRect();
+      const next = viewer.querySelector("#next-frame");
+      const button = next.getBoundingClientRect();
+      const hit = document.elementFromPoint(button.x + button.width / 2, button.y + button.height / 2);
+      return {
+        textVisible: text.top >= viewport.top && text.bottom <= viewport.bottom,
+        controlsInsideViewer: controls.bottom <= viewer.getBoundingClientRect().bottom + 1,
+        controlsHit: next.contains(hit),
+      };
+    });
+  }
+
+  await divider.focus();
+  await page.keyboard.press("End");
+  await expect.poll(evidenceFits).toEqual({ textVisible: true, controlsInsideViewer: true, controlsHit: true });
+
+  await page.locator('#filmstrip [data-frame="0"]').click();
+  await divider.focus();
+  await page.keyboard.press("End");
+  const expandedHeight = (await details.boundingBox()).height;
+  await page.locator("#failure").click();
+  await expect.poll(evidenceFits).toEqual({ textVisible: true, controlsInsideViewer: true, controlsHit: true });
+  expect((await details.boundingBox()).height).toBeLessThan(expandedHeight);
+});
+
 test("tabs expose metadata and support roving keyboard focus", async ({ page, openReport }) => {
   await openReport();
   await expect(page.locator("#cell-tab")).toHaveAttribute("aria-controls", "cell-panel");
@@ -341,6 +501,7 @@ test("attachments preview inert text and download original bytes offline", async
   await openReport(data);
   await page.locator("#attachments-tab").click();
   await page.locator('[data-attachment="failure.md"]').click();
+  await expect(page.locator('[data-attachment="failure.md"]')).toHaveAttribute("aria-current", "true");
   await expect(page.locator("#attachment-preview pre")).toHaveText(hostile);
   await expect(page.locator("#attachment-preview script")).toHaveCount(0);
   for (const file of data.attachments) {

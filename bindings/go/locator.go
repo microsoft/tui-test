@@ -8,6 +8,8 @@ type locatorNode struct {
 	regex      *bool
 	whitespace *Whitespace
 	style      *TextStyle
+	scope      *TextScope
+	matchStyle *TextStyle
 	link       *string
 	full       *bool
 	direction  *Direction
@@ -79,6 +81,7 @@ func newTextLocator(client *Client, parent *locatorQuery, text string, options T
 		direction = Within
 	}
 	node := locatorNode{kind: "text", text: Ptr(text), regex: Ptr(options.Regex), whitespace: Ptr(whitespace), full: Ptr(options.Full), direction: Ptr(direction), occurrence: "any"}
+	node.scope = cloneTextScope(options.Scope)
 	return &Locator{client: client, query: appendLocatorNode(parent, node)}
 }
 
@@ -114,6 +117,47 @@ func cloneTextStyle(style TextStyle) TextStyle {
 	style.Strikethrough = clonePointer(style.Strikethrough)
 	style.Blink = clonePointer(style.Blink)
 	return style
+}
+
+func cloneTextScope(scope *TextScope) *TextScope {
+	if scope == nil {
+		return nil
+	}
+	result := *scope
+	clone := func(anchor *TextAnchor) *TextAnchor {
+		if anchor == nil {
+			return nil
+		}
+		value := *anchor
+		value.Nth = clonePointer(anchor.Nth)
+		return &value
+	}
+	result.After, result.Before = clone(scope.After), clone(scope.Before)
+	return &result
+}
+
+// WithStyle keeps whole matches whose visible cells satisfy the style.
+func (locator *Locator) WithStyle(style TextStyle) *Locator {
+	query := cloneLocatorQuery(locator.query)
+	style = cloneTextStyle(style)
+	query.nodes[query.root].matchStyle = &style
+	return &Locator{client: locator.client, query: query}
+}
+
+func (locator *Locator) RelativeTo(parent *Locator, direction Direction) (*Locator, error) {
+	operand, err := locator.operand(parent)
+	if err != nil {
+		return nil, err
+	}
+	if direction == "" {
+		direction = Within
+	}
+	query := cloneLocatorQuery(operand)
+	within := query.root
+	query.root = appendLocatorOperand(&query, locator.query)
+	query.nodes[query.root].within = Ptr(within)
+	query.nodes[query.root].direction = Ptr(direction)
+	return &Locator{client: locator.client, query: query}, nil
 }
 
 func (locator *Locator) GetByText(text string, options TextSelectorOptions) *Locator {
@@ -246,6 +290,16 @@ func (locator *Locator) All() ([]*Locator, error) {
 		}
 	}
 	return locators, nil
+}
+
+func (locator *Locator) HighlightMatches(options WaitOptions) ([]TextMatch, error) {
+	var matches []TextMatch
+	err := locator.client.wait("locator.highlight", options.Timeout, locator.client.options.Timeouts.Text, func(timeout *time.Duration) error {
+		result, err := locator.client.runtime.session.HighlightMatches(engineLocatorQuery(locator.query), timeout)
+		matches = engineMatches(result)
+		return engineError(err)
+	})
+	return matches, err
 }
 
 func (locator *Locator) Wait(options LocatorWaitOptions) error {

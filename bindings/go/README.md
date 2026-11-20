@@ -126,6 +126,63 @@ go run github.com/microsoft/tui-test/bindings/go/examples/smoke
 
 Without an override, it prints `Go binding smoke passed (bundled engine)`.
 
+## Scoped queries and session context
+
+```go
+save := terminal.GetByText("Save", tuitest.TextSelectorOptions{
+    Scope: &tuitest.TextScope{
+        After: &tuitest.TextAnchor{Text: "Start"},
+        Before: &tuitest.TextAnchor{Text: "End"},
+    },
+}).WithStyle(tuitest.TextStyle{Bold: tuitest.Ptr(true)})
+```
+
+`TextAnchor` supports `Text`, `Regex`, `Occurrence`, and `Nth`.
+Occurrence defaults to `OccurrenceUnique`.
+Other values are `OccurrenceAny`, `OccurrenceFirst`, and `OccurrenceLast`.
+Set `Nth` to a zero-based index to select that anchor occurrence.
+`WithStyle` tests each whole text, style, or link match.
+It ignores blank cells when visible characters exist.
+Rust rejects scope or whole-match style on composite nodes.
+Apply these fields to the operands before composition.
+It does not replace `And(terminal.GetByStyle(...))`, which intersects cells.
+`RelativeTo(parent, direction)` accepts `Within`, `After`, or `Before`; an empty direction means `Within`.
+The parent must belong to the same client.
+These methods leave the original queries and caller options unchanged.
+
+`ClientOptions` and `SpawnOptions` accept `Context *ExecutionContext`.
+Its fields are `OperationName`, `DiagnosticContext`, `Artifacts`, `Trace`, and `ScreenHistoryLimit`.
+`DiagnosticContext` maps string keys to string values.
+The engine sanitizes and limits those fields before it writes them.
+Per-call fields override constructor fields for that spawn only.
+`SpawnOptions.Recording` overrides the constructor recording directory.
+An explicit empty `AutomaticRecording` restores the engine's default directory.
+`AutomaticRecording.Mode` accepts `RecordingDisabled`, `RecordingOnFailure`, or `RecordingAlways`.
+Explicit trace options take precedence over this mode.
+The CLI configuration still permits only `recording.directory`.
+
+`FinishTrace(failed)` completes the trace without closing the terminal.
+`Interrupt()` cancels pending operations and terminates the child without an operation queue wait.
+It does not send a keyboard interrupt.
+Later waits report cancellation until restart or close.
+An absent session produces an error with kind `NoSessionError`.
+Call `Close()` afterward to release the named session.
+`Sessions()` reports open sessions; `OpenResult.Recording` supplies the automatic recording path.
+`Recording(name)` reads current or retained recording content.
+`PackedScreen(TextOptions)` returns owned UTF-8 bytes and terminal dimensions.
+`locator.HighlightMatches(WaitOptions)` returns the highlighted matches.
+The existing `Highlight` method still returns only an error.
+
+Run the complete example from `bindings/go`:
+
+```sh
+go run ./examples/parity
+```
+
+The example creates trace artifacts under `artifacts/parity-go`.
+Set `TUI_TEST_PARITY_ARTIFACTS` to choose another directory.
+Artifacts can contain terminal text.
+
 ## Sessions and options
 
 `New(session, ClientOptions{})` creates a client for a named session. An empty name uses `TUI_TEST_SESSION`, falling back to `"default"`. `Ephemeral(prefix, options)` creates a unique name. Construction does not start a terminal; call `Open` or `Run`.
@@ -258,6 +315,31 @@ Trace and failure-artifact directories can contain terminal output, titles, loca
 These controls support APNG, GIF, and MP4 only. Asciicast requests return usage errors without changing the recording.
 Automatic diagnostic recordings and recovery casts remain continuous, including output during pauses.
 `StopRecording` also works during a pause. Repeated pause or resume calls return usage errors.
+
+### Rendering settings and native assertions
+
+Set `Style` in `ClientOptions` or `SpawnOptions`. `RenderStyle` supports fonts, colors, padding, window controls, borders, shadows, and cursor animation.
+A per-call style replaces the constructor style. Nil fields use Rust defaults. Use `Ptr(false)` and `Ptr(0)` for explicit values.
+Restart preserves the resolved style. These settings affect screenshots and raster recordings, not terminal colors or locator assertions.
+
+```go
+style := &tuitest.RenderStyle{
+    FontSize: tuitest.Ptr(24.0),
+    Window: tuitest.WindowStyle{TitleBar: tuitest.Ptr(false)},
+    Cursor: tuitest.RecordingCursorStyle{
+        Blink: tuitest.Ptr(false),
+        BlinkIntervalMS: tuitest.Ptr(uint64(250)),
+    },
+}
+terminal, err := tuitest.Ephemeral("styled", tuitest.ClientOptions{Style: style})
+```
+
+`Blink` permits application-requested animation. Its default is true. `BlinkIntervalMS` sets each phase before playback speed scaling; its default is 500.
+`Padding` accepts either `Uniform` or individual sides, not both. Screenshots always use the visible cursor phase.
+Run `go run ./examples/rendering` for a complete example.
+
+`GetModes` and `GetColors` read native state. `ExpectCursor`, `ExpectMode`, and `ExpectColors` poll in Rust and use the text timeout by default.
+Use `CursorExpectation` and `ColorExpectation` for optional properties. Palette expectations use `map[uint8]string`.
 
 Raster recording samples the live terminal at `FPS` (default: 30) and preserves elapsed time until stop.
 There is no default idle cap or extra final hold.

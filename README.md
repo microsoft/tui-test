@@ -43,12 +43,12 @@ You can also download a binary from [GitHub Releases](https://github.com/microso
 
 | Language | Install |
 | --- | --- |
-| Rust | `cargo add tui-test-rs` |
-| Python | `pip install tui-test` |
 | JavaScript / TypeScript | `npm install @microsoft/tui-test` |
-| Go | `go get github.com/microsoft/tui-test/bindings/go@latest` |
+| Python | `pip install tui-test` |
+| Rust | `cargo add tui-test-rs@0.1.1` |
+| Go | `go get github.com/microsoft/tui-test/bindings/go@v0.1.1` |
 
-Libraries run in-process and do not require the CLI. See the [installation guide](https://tui-test.dev/docs/install/) for requirements and supported platforms.
+Libraries run the terminal engine in-process without requiring the CLI binary. See the [installation guide](https://tui-test.dev/docs/install/) for runtime requirements and supported platforms.
 
 ## Examples
 
@@ -57,28 +57,12 @@ Replace `my-app` with the program you want to test.
 ### CLI
 
 ```sh
-tui-test run my-app
-tui-test expect text "Ready"
-tui-test click text "Continue"
-tui-test expect text "Done"
-tui-test screenshot -o result.svg
-tui-test close
-```
-
-### Python
-
-```python
-import asyncio
-from tui_test import TuiTest
-
-async def main():
-    async with TuiTest.ephemeral() as terminal:
-        await terminal.run("my-app")
-        await terminal.get_by_text("Ready").expect()
-        await terminal.get_by_text("Continue").click()
-        await terminal.get_by_text("Done").expect()
-
-asyncio.run(main())
+tui-test --session demo run my-app
+tui-test --session demo expect text "Ready"
+tui-test --session demo click text "Continue"
+tui-test --session demo expect text "Done"
+tui-test --session demo screenshot -o result.svg
+tui-test --session demo close
 ```
 
 ### JavaScript / TypeScript
@@ -98,19 +82,51 @@ try {
 }
 ```
 
+### Python
+
+```python
+import asyncio
+from tui_test import TuiTest
+
+async def main():
+    async with TuiTest.ephemeral() as terminal:
+        await terminal.run("my-app")
+        await terminal.get_by_text("Ready").expect()
+        await terminal.get_by_text("Continue").click()
+        await terminal.get_by_text("Done").expect()
+
+asyncio.run(main())
+```
+
 ### Rust
 
 ```rust
-use tui_test::{OpenOptions, Operation, Session};
+use tui_test::{Backend, RunOptions, Session};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let terminal = Session::new("example");
-    terminal.open(OpenOptions::default())?;
-    terminal.execute(Operation::Submit {
-        data: Some("echo hello".into()),
+    terminal.run(RunOptions {
+        program: "my-app".into(),
+        args: vec![],
+        backend: Backend::Alacritty,
+        profile: Default::default(),
+        cols: 80,
+        rows: 30,
+        cwd: None,
+        env: vec![],
+        wait_ready: None,
+        restart: false,
+        timeouts: Default::default(),
+        recording: Default::default(),
+        style: Default::default(),
     })?;
-    terminal.get_by_text("hello").last().expect()?;
+    let result = (|| {
+        terminal.get_by_text("Ready").expect()?;
+        terminal.get_by_text("Continue").click()?;
+        terminal.get_by_text("Done").expect()
+    })();
     terminal.close()?;
+    result?;
     Ok(())
 }
 ```
@@ -134,13 +150,24 @@ func main() {
     defer terminal.CloseQuiet()
 
     if _, err := terminal.Run("my-app", nil, tuitest.SpawnOptions{}); err != nil {
-        log.Fatal(err)
+        log.Print(err)
+        return
     }
     if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
-        log.Fatal(err)
+        log.Print(err)
+        return
+    }
+    if err := terminal.GetByText("Continue", tuitest.TextSelectorOptions{}).Click(tuitest.LocatorClickOptions{}); err != nil {
+        log.Print(err)
+        return
+    }
+    if err := terminal.GetByText("Done", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        log.Print(err)
     }
 }
 ```
+
+See the [documentation](https://tui-test.dev/docs/) for [test runner integration](https://tui-test.dev/docs/getting-started/testing/), [locators](https://tui-test.dev/docs/guides/locators/), [recordings](https://tui-test.dev/docs/capture/recordings/), [failure traces](https://tui-test.dev/docs/capture/traces/), and the [CLI reference](https://tui-test.dev/docs/reference/cli/).
 
 ## Contributing
 

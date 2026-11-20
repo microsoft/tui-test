@@ -12,6 +12,7 @@ Use `tui-test` to control and test a real terminal.
 | Context | Use | Reference |
 | --- | --- | --- |
 | Agent or shell workflow | CLI | [CLI](references/cli.md) |
+| Trusted tape to GIF | Local CLI workflow | [Tape](references/tape.md) |
 | Python code | `tui_test` | [Python](references/python.md) |
 | JavaScript or TypeScript | `@microsoft/tui-test` | [JavaScript](references/javascript.md) |
 | Rust code | `tui-test-rs` | [Rust](references/rust.md) |
@@ -32,6 +33,20 @@ tui-test close
 ```
 
 Run `tui-test agent-context` for exact command and option names.
+
+For a trusted tape, use the isolated local workflow:
+
+```sh
+tui-test tape check demo.tape --json
+tui-test tape run demo.tape
+```
+
+Both commands report the effective grid, pixel dimensions, and source-located warnings.
+`check` does not start a child or write an output.
+Tape commands ignore `TUI_TEST_SESSION` and do not load project configuration.
+They reject explicit session and diagnostic flags; only the global `--json` flag applies.
+Warning: Run only trusted tapes. Tapes can execute shell commands; they are not sandboxed.
+See [Tape](references/tape.md) for an example and the supported subset.
 
 ## Python
 
@@ -112,6 +127,7 @@ For a failed assertion that must be understood offline, add `--failure-artifacts
 ## References
 
 - [CLI](references/cli.md)
+- [Tape](references/tape.md)
 - [Python](references/python.md)
 - [JavaScript](references/javascript.md)
 - [Rust](references/rust.md)

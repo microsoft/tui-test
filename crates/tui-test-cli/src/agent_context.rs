@@ -148,6 +148,12 @@ mod tests {
         assert_eq!(doc["schema_version"], json!(SCHEMA_VERSION));
         assert_eq!(doc["name"], json!("tui-test"));
         assert!(doc["commands"]["expect"].is_object());
+        for action in ["check", "run"] {
+            let file = &doc["commands"]["tape"]["subcommands"][action]["args"][0];
+            assert_eq!(file["name"], "file");
+            assert_eq!(file["required"], true);
+            assert_eq!(file["positional"], true);
+        }
         assert_eq!(
             doc["commands"]["monitor"]["args"][0]["long"],
             json!("--interactive")
@@ -174,5 +180,29 @@ mod tests {
             .unwrap();
         let values = recording_format["values"].as_array().unwrap();
         assert!(values.contains(&json!("mp4")));
+    }
+
+    #[test]
+    fn session_parity_commands_and_context_are_discoverable() {
+        let doc: Value = serde_json::from_str(&render()).unwrap();
+        for command in ["find", "resolve", "wait", "expect", "click", "highlight"] {
+            let args = doc["commands"][command]["subcommands"]["query"]["args"]
+                .as_array()
+                .unwrap();
+            for flag in ["--query", "--query-file"] {
+                assert!(args.iter().any(|arg| arg["long"] == flag));
+            }
+        }
+        assert!(doc["commands"]["packed-screen"].is_object());
+        assert!(doc["commands"]["interrupt"].is_object());
+        assert!(doc["commands"]["trace"]["subcommands"]["finish"].is_object());
+        assert!(doc["commands"]["wait"]["subcommands"]["text"].is_object());
+        for flag in ["--context-file", "--operation-name"] {
+            assert!(doc["global_flags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|arg| arg["long"] == flag));
+        }
     }
 }

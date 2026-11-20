@@ -14,6 +14,8 @@ type nativeFunctionTable struct {
 	CloseAll         func() *abiResult
 	Recording        func(abiString) *abiResult
 	Close            func(abiString, abiOptionalBool) *abiResult
+	FinishTrace      func(abiString, bool) *abiResult
+	Interrupt        func(abiString) *abiResult
 	Restart          func(abiString, uint64) *abiResult
 	State            func(abiString) *abiResult
 	GetCommand       func(abiString) *abiResult
@@ -21,6 +23,11 @@ type nativeFunctionTable struct {
 	GetExitCode      func(abiString) *abiResult
 	GetCwd           func(abiString) *abiResult
 	GetCursor        func(abiString) *abiResult
+	GetModes         func(abiString) *abiResult
+	GetColors        func(abiString) *abiResult
+	ExpectMode       func(abiString, abiString, bool, abiOptionalU64) *abiResult
+	ExpectCursor     func(abiString, abiCursorExpectation) *abiResult
+	ExpectColors     func(abiString, abiColorExpectation) *abiResult
 	GetSize          func(abiString) *abiResult
 	GetTitle         func(abiString) *abiResult
 	GetClipboard     func(abiString) *abiResult
@@ -79,6 +86,8 @@ func nativeRegistrations(table *nativeFunctionTable) []nativeRegistration {
 		{symbol: "tui_close_all", target: &table.CloseAll},
 		{symbol: "tui_recording", target: &table.Recording},
 		{symbol: "tui_close", target: &table.Close},
+		{symbol: "tui_finish_trace", target: &table.FinishTrace},
+		{symbol: "tui_interrupt", target: &table.Interrupt},
 		{symbol: "tui_restart", target: &table.Restart},
 		{symbol: "tui_state", target: &table.State},
 		{symbol: "tui_get_command", target: &table.GetCommand},
@@ -86,6 +95,11 @@ func nativeRegistrations(table *nativeFunctionTable) []nativeRegistration {
 		{symbol: "tui_get_exit_code", target: &table.GetExitCode},
 		{symbol: "tui_get_cwd", target: &table.GetCwd},
 		{symbol: "tui_get_cursor", target: &table.GetCursor},
+		{symbol: "tui_get_modes", target: &table.GetModes},
+		{symbol: "tui_get_colors", target: &table.GetColors},
+		{symbol: "tui_expect_mode", target: &table.ExpectMode},
+		{symbol: "tui_expect_cursor", target: &table.ExpectCursor},
+		{symbol: "tui_expect_colors", target: &table.ExpectColors},
 		{symbol: "tui_get_size", target: &table.GetSize},
 		{symbol: "tui_get_title", target: &table.GetTitle},
 		{symbol: "tui_get_clipboard", target: &table.GetClipboard},

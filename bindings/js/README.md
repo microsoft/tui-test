@@ -59,6 +59,70 @@ try {
 
 ## API
 
+### Scoped queries and session context
+
+```js
+const save = terminal.getByText("Save", {
+  scope: {
+    after: { text: "Start", regex: false, occurrence: "unique" },
+    before: { text: "End", occurrence: { nth: 0 } },
+  },
+}).withStyle({ bold: true });
+const choice = save.relativeTo(terminal.getByText("Header"), "after")
+  .withStyle({ italic: false }).or(terminal.getByLink("test:save"));
+```
+
+`TextAnchor.occurrence` accepts `"any"`, `"unique"`, `"first"`, `"last"`, or `{ nth: index }`.
+Anchors default to `"unique"`.
+`withStyle` tests each whole match.
+It ignores blank cells when visible characters exist.
+It works on text, style, and link queries.
+It does not replace `and(terminal.getByStyle(...))`, which intersects cells.
+Leaf selector options also accept `matchStyle`.
+`relativeTo(parent, direction?)` supports those same query kinds and defaults to `"within"`.
+Rust rejects scope or whole-match style on composite nodes.
+Apply these fields to the operands before composition.
+The parent must belong to the same `TuiTest` instance.
+These methods copy their options and leave their operands unchanged.
+
+Constructor options and per-call `open`/`run` options accept `context: ExecutionContext`.
+The context fields are `operationName`, `diagnosticContext`, `artifacts`, `trace`, and `screenHistoryLimit`.
+`diagnosticContext` maps string keys to string values.
+The engine sanitizes and limits diagnostic fields before it writes them.
+Per-call fields override constructor fields for that spawn only.
+`open` and `run` also accept `recording: { directory }`.
+An explicit `recording: {}` restores the engine's default directory.
+The runtime API also accepts `recording.mode`: `"disabled"` (default), `"on-failure"`, or `"always"`.
+This controls automatic casts without a trace.
+Explicit trace options take precedence over this mode.
+The CLI configuration still permits only `recording.directory`.
+Explicit empty diagnostic maps clear inherited diagnostic fields.
+
+`finishTrace(failed = false)` completes the trace without closing the terminal.
+`interrupt()` cancels pending operations and terminates the child without an operation queue wait.
+It is not a keyboard interrupt.
+Later waits report cancellation until restart or close.
+An absent session produces `NoSessionError`.
+Use `close()` afterward to release the named session.
+Use `sessions()` to check whether a named session is open.
+`OpenResult.recording` supplies the automatic recording path.
+`getRecording(name)` reads current or retained recording content.
+`packedScreen({ full? })` returns owned `utf8` bytes, `cols`, and `rows`.
+UTF-8 byte offsets are not terminal cell coordinates.
+`locator.highlightMatches({ timeout? })` returns the highlighted matches.
+The existing `highlight()` method still returns no value.
+`expectSnapshot(name, { cwd, update, includeStyle, includeTitle })` accepts an explicit working directory for snapshot files.
+
+Run the complete example from the repository root:
+
+```sh
+node bindings/js/examples/parity.mjs
+```
+
+The example creates trace artifacts under `artifacts/parity-js`.
+Set `TUI_TEST_PARITY_ARTIFACTS` to choose another directory.
+Artifacts can contain terminal text.
+
 ### `TuiTest`
 
 ```ts
@@ -73,7 +137,7 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `profile` | `Profile` | built-in profile |
 | `screenHistoryLimit` | `number` | `10` |
 | `artifacts` | `{ dir, onFailure?, includeRecording? }` | off |
-| `recording` | `{ directory? }` | default recording directory |
+| `recording` | `{ directory?, mode? }` | default directory, disabled mode |
 | `trace` | `{ mode?, directory? }` | `{ mode: "off", directory: ".tui-test/traces" }` |
 
 Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Users can open `trace.html`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
@@ -100,7 +164,7 @@ Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Use
 | `closeQuiet()` | Close without throwing. |
 | `[Symbol.asyncDispose]()` | Close from `await using`. |
 
-`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, `timeouts`, and `screenHistoryLimit`. `run()` accepts the same options except `shell`.
+`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, `style`, `timeouts`, and `screenHistoryLimit`. `run()` accepts the same options except `shell`.
 
 The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
 
@@ -154,6 +218,8 @@ The [example](examples/scrollback.mjs) prints the live screen, history view, and
 | `getExitCode()` | `number \| null` |
 | `getCwd()` | `string \| null` |
 | `getCursor()` | `Cursor` |
+| `getModes()` | `Record<string, boolean>` |
+| `getColors()` | `State["colors"]` |
 | `getSize()` | `Size` |
 | `getTitle()` | `string \| null` |
 | `getClipboard()` | `string` |
@@ -176,6 +242,11 @@ The [example](examples/scrollback.mjs) prints the live screen, history view, and
 | `expectOutput(text, { regex? })` | Assert command output. |
 | `expectBellCount(count, { timeout? })` | Wait until the cumulative bell count reaches `count`. |
 | `expectSnapshot(name, options?)` | Assert or update a snapshot. |
+| `expectCursor(options)` | Wait for cursor position, visibility, or shape. |
+| `expectMode(mode, enabled, options?)` | Wait for a native terminal mode. |
+| `expectColors(options)` | Wait for foreground, background, cursor, or palette colors. |
+
+Native assertions accept `timeout` in milliseconds and use the text timeout by default. Palette expectations use `[index, color]` pairs.
 
 `waitClipboard()` waits for the next change. A string matches text. A `RegExp` keeps its JavaScript flags.
 
@@ -196,12 +267,32 @@ Recording options: `format`, `fps`, `speed`, `idleTimeLimit`, `zoom`, `backgroun
 Asciicast pause and resume return usage errors without changing the recording.
 Automatic diagnostic recordings and recovery casts remain continuous, including output during pauses.
 
-Raster recording samples the live terminal at `fps` (default: 30) and preserves elapsed time until stop.
+Raster recording samples the live terminal at `fps` (default: 30) and preserves active elapsed time until stop.
 There is no default idle cap or extra final hold.
 Set `idleTimeLimit` to cap unchanged visual intervals before `speed` scales playback time.
 Asciicast remains a timestamped output stream; FPS sampling does not change it.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `format` overrides it.
+
+### Rendering settings
+
+Set `style` in the client constructor, `open()`, or `run()`. The typed `RenderStyle` supports fonts, colors, padding, window controls, borders, shadows, and cursor animation.
+A per-call style replaces the constructor style. Omitted nested fields use Rust defaults. Explicit `false` and zero remain unchanged.
+Restart preserves the resolved style. These settings affect screenshots and raster recordings, not terminal colors or locator assertions.
+
+```js
+const terminal = TuiTest.ephemeral("styled", {
+  style: {
+    fontSize: 24,
+    window: { titleBar: false },
+    cursor: { blink: false, blinkIntervalMs: 250 },
+  },
+});
+```
+
+`blink` permits application-requested animation; it does not make a steady cursor blink. Each phase uses `blinkIntervalMs` before playback speed scaling.
+The default values are `true` and `500`. Screenshots always use the visible phase.
+Run `node examples/rendering.mjs` from this package for a complete example.
 
 ### `Locator`
 

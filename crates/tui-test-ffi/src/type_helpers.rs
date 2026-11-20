@@ -66,6 +66,9 @@ pub struct TuiColor {
 #[repr(C)]
 #[derive(Default)]
 pub struct TuiResult {
+    pub modes: *const TuiMode,
+    pub modes_len: usize,
+    pub colors: TuiTerminalColors,
     pub error_kind: u32,
     pub error_message: TuiString,
     pub error_details: TuiString,

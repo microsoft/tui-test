@@ -41,6 +41,81 @@ Add `recording-raster` for APNG, GIF, and MP4. Add `ghostty`, `rio`, or `xtermjs
 
 Raster output uses installed fonts. Add a `recording-font-jetbrains-mono*` feature to bundle one.
 
+## Session behavior across bindings
+
+The bindings expose terminal operations, not the Rust renderer or emulator extension interfaces.
+The table uses JavaScript names. Python uses snake case. Go uses exported PascalCase names unless noted.
+
+| Rust operation | Binding entry point |
+| --- | --- |
+| `Open`, `Run`, `Restart`, `Close` | `open`, `run`, `restart`, `close` |
+| `FinishTrace` | `finishTrace(failed)`; does not close the terminal |
+| `State`, `Text`, `PackedScreen`, `Cells` | `state`, `text`, `packedScreen`, `cells` |
+| `GetCommand`, `GetOutput`, `GetExitCode`, `GetCwd` | `getCommand`, `getOutput`, `getExitCode`, `getCwd` |
+| `GetCursor`, `GetModes`, `GetColors`, `GetSize`, `GetViewport` | Corresponding `get` methods |
+| `GetTitle`, `GetClipboard`, `GetBellCount`, `GetBellEvents` | Corresponding `get` methods |
+| `Write`, `Submit`, `Key` | `write`, `submit`, and `keyboard.press/down/repeat/up` |
+| `Mouse` | `mouse.click/move/down/up/drag/scroll` |
+| `Resize`, `Scroll`, `Signal` | `resize`, `scroll/scrollToTop/scrollToBottom`, `signal` |
+| `WaitTitle`, `WaitClipboard`, `WaitClipboardMatch` | `waitTitle`, `waitClipboard` with an optional text or regex pattern |
+| `WaitIdle`, `WaitCommand`, `WaitExit`, `WaitReady`, `WaitBell` | Corresponding `wait` methods |
+| `FindLocator`, `ResolveLocator` | `locator.locations`, `locator.location` |
+| `WaitLocator` | `locator.wait` or `locator.expect`; both support negative checks |
+| `ClickLocator`, `HighlightLocator` | `locator.click`, `locator.highlightMatches` |
+| `ExpectTitle`, `ExpectExitCode`, `ExpectMode`, `ExpectColors`, `ExpectCursor` | Corresponding `expect` methods |
+| `ExpectOutput`, `ExpectBellCount` | Corresponding `expect` methods |
+| `Snapshot`, `Screenshot` | `expectSnapshot`, `screenshot` |
+| `StartRecording`, `PauseRecording`, `ResumeRecording`, `StopRecording` | Corresponding recording methods |
+
+`highlight` retains its existing unit result. `highlightMatches` also returns the resolved matches.
+Packed screens retain UTF-8 bytes, columns, rows, trailing spaces, and blank lines.
+Python returns `(memoryview, cols, rows)`; JavaScript and Go return typed objects.
+All result payloads copy native memory before the adapters release the native result.
+Screenshot results use strings: a requested file yields its path, and inline capture yields its content.
+Snapshot options retain `cwd`, update mode, style inclusion, and title inclusion.
+
+### Input fields
+
+`OpenOptions` and `RunOptions` retain backend, profile, dimensions, cwd, environment, readiness, restart, timeouts, recording, and rendering style.
+Open adds the shell; run adds the program and arguments.
+Per-call recording directories override constructor defaults.
+Runtime APIs also expose `AutomaticRecording.mode` for casts without traces.
+Its values are disabled, on-failure, and always. Explicit trace options take precedence.
+Serde omits this runtime field, so the CLI configuration still accepts only the recording directory.
+`ExecutionContext` retains the operation name, artifact options, diagnostic map, retention limit, and trace options.
+Bindings accept this context on the constructor and on each spawn.
+Per-spawn context overrides do not mutate constructor defaults.
+Rust sanitizes diagnostic maps before it writes them.
+
+Text selectors retain text, regex, full-grid selection, whitespace mode, and scope anchors.
+Each anchor retains text, regex, and occurrence selection.
+The shared expression uses `scope` for text anchors and `match_style` for whole-match style.
+The separate `style` field remains the style-selector payload.
+Public `withStyle`, `with_style`, and `WithStyle` apply whole-match style to text, style, and link locators.
+Style tests ignore blank cells when visible characters exist.
+Intersections with a style locator still select cells; they do not become whole-match filters.
+Public `relativeTo`, `relative_to`, and `RelativeTo` apply `within`, `after`, or `before` to those locators.
+Rust rejects scope or whole-match style on composite nodes.
+Apply these fields to the operands before composition.
+Composite locators retain branch selection and containment.
+All locator operands must belong to the same owner.
+
+### Session ownership and exclusions
+
+Bindings use the process-local named registry rather than independent Rust `Session` values.
+Their session lists provide the equivalent of `Session::is_open`.
+`OpenResult.recording` supplies the automatic recording path.
+Recording helpers read current recordings and recordings retained after close.
+The path belongs to the engine; it is not a permanent archive.
+`interrupt` cancels pending operations and terminates the child without an operation queue wait.
+It is not a key event. Call `close` afterward to release the registry entry.
+Later waits report cancellation until restart or close.
+Registry interruption returns `NoSession` when the name has no session.
+
+Monitor frames, raw input, engine logs, renderer internals, and emulator extension interfaces remain Rust implementation APIs.
+Host signals retain platform support limits. Language regex objects retain their documented host-language behavior.
+Named sessions do not share state with the CLI process.
+
 ### Recording timing
 
 `Operation::StartRecording` samples the live terminal at the configured `fps`, which defaults to 30.

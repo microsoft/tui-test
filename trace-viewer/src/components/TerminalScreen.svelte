@@ -41,10 +41,10 @@
 </div>
 
 <style>
-  .viewport { container-type: size; display: flex; align-items: flex-start; flex: 1; min-height: 0; overflow: auto; padding: 12px; background: var(--panel); }
-  #terminal { position: relative; flex-shrink: 0; margin: 0 auto; padding: 0; border: 0; border-radius: 0; line-height: 0; cursor: crosshair; box-shadow: 0 1px 5px #0003; }
+  .viewport { container-type: size; display: flex; align-items: flex-start; flex: 1; min-height: 0; overflow: auto; padding: 8px; background: var(--panel); }
+  #terminal { position: relative; flex-shrink: 0; margin: 0 auto; padding: 0; border: 0; border-radius: 0; line-height: 0; cursor: crosshair; box-shadow: 0 0 0 1px var(--border); }
   .fit #terminal { max-width: 100%; }
   #screen-image { width: 100%; height: auto; display: block; }
   #screen-text { padding: 10px; white-space: pre; align-self: stretch; width: 100%; }
-  @media (max-width: 600px) { .viewport { padding: 5px; } }
+  @media (max-width: 600px) { .viewport { padding: 6px; } }
 </style>

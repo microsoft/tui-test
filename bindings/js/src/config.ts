@@ -3,6 +3,7 @@ import path from "node:path";
 import type {
   ArtifactOptions,
   AutomaticRecording,
+  ExecutionContext,
   TraceOptions,
   Backend,
   Profile,
@@ -141,10 +142,16 @@ export function recordingPayload(
   }
   const raw = profileObject(recording, "recording");
   const unknown = Object.keys(raw).filter(
-    (key) => key !== "directory",
+    (key) => key !== "directory" && key !== "mode",
   );
   if (unknown.length > 0) {
     throw new TypeError(`unknown recording field ${unknown.join(", ")}`);
+  }
+  if (
+    raw.mode !== undefined &&
+    (typeof raw.mode !== "string" || !["disabled", "on-failure", "always"].includes(raw.mode))
+  ) {
+    throw new TypeError("recording.mode must be disabled, on-failure, or always");
   }
   if (
     raw.directory !== undefined &&
@@ -152,7 +159,7 @@ export function recordingPayload(
   ) {
     throw new TypeError("recording.directory must be a non-empty string");
   }
-  return raw as AutomaticRecording;
+  return { ...raw } as AutomaticRecording;
 }
 
 export function tracePayload(trace?: TraceOptions): TraceOptions | undefined {
@@ -166,7 +173,19 @@ export function tracePayload(trace?: TraceOptions): TraceOptions | undefined {
   if (raw.directory !== undefined && (typeof raw.directory !== "string" || !raw.directory)) {
     throw new TypeError("trace.directory must be a non-empty string");
   }
-  return raw as TraceOptions;
+  return { ...raw } as TraceOptions;
+}
+
+export function contextPayload(context?: ExecutionContext) {
+  if (context === undefined) return undefined;
+  return {
+    ...context,
+    diagnosticContext: context.diagnosticContext === undefined
+      ? undefined
+      : { ...context.diagnosticContext },
+    artifacts: artifactPayload(context.artifacts),
+    trace: tracePayload(context.trace),
+  };
 }
 
 export interface FailureArtifactPayload {
