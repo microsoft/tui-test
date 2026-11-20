@@ -630,6 +630,7 @@ fn map_field(field: GetArg) -> GetField {
         GetArg::Size => GetField::Size,
         GetArg::Title => GetField::Title,
         GetArg::Clipboard => GetField::Clipboard,
+        GetArg::ProgressBar => GetField::ProgressBar,
         GetArg::Bells => GetField::BellCount,
         GetArg::BellEvents => GetField::BellEvents,
     }
@@ -742,6 +743,13 @@ fn map_wait(what: WaitCmd) -> anyhow::Result<Request> {
         },
         WaitCmd::Ready { timeout } => Request::WaitReady {
             timeout_ms: timeout,
+        },
+        WaitCmd::ProgressBar(args) => Request::WaitProgressBar {
+            expected: tui_test::api::ProgressBarMatch {
+                state: args.state.map(Into::into),
+                progress: args.progress,
+            },
+            timeout_ms: args.timeout,
         },
         WaitCmd::Bell { timeout } => Request::WaitBell {
             timeout_ms: timeout,
@@ -975,6 +983,13 @@ fn map_expect(what: ExpectCmd) -> anyhow::Result<Request> {
             x,
             y,
             timeout_ms: timeout,
+        },
+        ExpectCmd::ProgressBar(args) => Request::ExpectProgressBar {
+            expected: tui_test::api::ProgressBarMatch {
+                state: args.state.map(Into::into),
+                progress: args.progress,
+            },
+            timeout_ms: args.timeout,
         },
         ExpectCmd::Bell { count, timeout } => Request::ExpectBellCount {
             count,
@@ -1648,7 +1663,7 @@ INSPECT   state | text [--full] | screenshot [-o file.svg|file.png] [--full] [--
           [--background COLOR | --transparent]\n\
           find text \"T\" [selector/style options] | cells X Y [W H]\n\
           packed-screen [--full] --json | resolve text \"T\" [selector/style options]\n\
-          get command|output|exit-code|cwd|cursor|viewport|modes|colors|size|title|clipboard|bells|bell-events\n\
+          get command|output|exit-code|cwd|cursor|viewport|modes|colors|size|title|clipboard|bells|bell-events|progress-bar\n\
 QUERY     find|resolve|wait|expect|click|highlight query --query JSON|--query-file PATH\n\
           Native nested LocatorQuery JSON; no shell expression language\n\
 HISTORY   scroll up|down [LINES] | scroll top|bottom\n\
@@ -1658,9 +1673,11 @@ INPUT     type \"text\" | submit [\"text\"]\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
 PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
 WAIT      wait title \"T\" [--regex --not --timeout MS]\n\
+          wait progress-bar [--state inactive|normal|error|indeterminate|paused] [--progress 0..100] [--timeout MS]\n\
           wait text \"T\" [selector/style options] [--not --timeout MS]\n\
           wait clipboard [TEXT] [--regex] | wait idle | wait command | wait exit | wait ready | wait bell\n\
 EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
+          expect progress-bar [--state inactive|normal|error|indeterminate|paused] [--progress 0..100] [--timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex] | expect bell N\n\
           expect snapshot NAME [-u] [--include-style --include-title] [--cwd DIR]\n\

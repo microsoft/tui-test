@@ -15,6 +15,42 @@
 //! emulators legitimately diverge (reflow when shrinking below content width)
 //! the test pins only the part that is universal and says why it stops short.
 
+#[cfg(any(feature = "ghostty", feature = "rio"))]
+pub(crate) fn native_progress_reports(
+    emu: &mut dyn crate::terminal::emu::Emulator,
+    reset_clears: bool,
+) {
+    use crate::api::{ProgressBar, ProgressState};
+    assert_eq!(emu.progress_bar(), Some(ProgressBar::default()));
+    for (bytes, state, progress) in [
+        ("\x1b]9;4;1;30\x07", ProgressState::Normal, 30),
+        ("\x1b]9;4;2\x07", ProgressState::Error, 30),
+        ("\x1b]9;4;4;70\x1b\\", ProgressState::Paused, 70),
+        ("\x1b]9;4;3\x07", ProgressState::Indeterminate, 70),
+        ("\x1b]9;4;0\x07", ProgressState::Inactive, 0),
+    ] {
+        emu.process(bytes.as_bytes());
+        assert_eq!(
+            emu.progress_bar(),
+            Some(ProgressBar {
+                state,
+                progress: Some(progress)
+            })
+        );
+    }
+    emu.process(b"\x1b]9;4;1;42\x07");
+    let active = emu.progress_bar();
+    emu.process(b"\x1bc");
+    assert_eq!(
+        emu.progress_bar(),
+        if reset_clears {
+            Some(ProgressBar::default())
+        } else {
+            active
+        }
+    );
+}
+
 /// One part of the contract a backend cannot express, declared where it opts in.
 ///
 /// This is deliberately not a general escape hatch. A variant earns its place

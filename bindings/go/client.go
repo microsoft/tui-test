@@ -265,19 +265,32 @@ func (client *Client) Text(options TextOptions) (string, error) {
 func (client *Client) Cells(x, y, width, height uint16) ([]Cell, error) {
 	return client.runtime.cells(x, y, width, height)
 }
-func (client *Client) GetCommand() (*string, error)        { return client.runtime.getCommand() }
-func (client *Client) GetOutput() (*string, error)         { return client.runtime.getOutput() }
-func (client *Client) GetExitCode() (*int32, error)        { return client.runtime.getExitCode() }
-func (client *Client) GetCwd() (*string, error)            { return client.runtime.getCwd() }
-func (client *Client) GetTitle() (*string, error)          { return client.runtime.getTitle() }
-func (client *Client) GetClipboard() (string, error)       { return client.runtime.getClipboard() }
-func (client *Client) GetCursor() (Cursor, error)          { return client.runtime.getCursor() }
-func (client *Client) GetModes() (map[string]bool, error)  { return client.runtime.getModes() }
-func (client *Client) GetColors() (TerminalColors, error)  { return client.runtime.getColors() }
-func (client *Client) GetViewport() (Viewport, error)      { return client.runtime.getViewport() }
-func (client *Client) GetSize() (Size, error)              { return client.runtime.getSize() }
-func (client *Client) GetBellCount() (uint64, error)       { return client.runtime.getBellCount() }
-func (client *Client) GetBellEvents() ([]BellEvent, error) { return client.runtime.getBellEvents() }
+func (client *Client) GetCommand() (*string, error)         { return client.runtime.getCommand() }
+func (client *Client) GetOutput() (*string, error)          { return client.runtime.getOutput() }
+func (client *Client) GetExitCode() (*int32, error)         { return client.runtime.getExitCode() }
+func (client *Client) GetCwd() (*string, error)             { return client.runtime.getCwd() }
+func (client *Client) GetTitle() (*string, error)           { return client.runtime.getTitle() }
+func (client *Client) GetClipboard() (string, error)        { return client.runtime.getClipboard() }
+func (client *Client) GetCursor() (Cursor, error)           { return client.runtime.getCursor() }
+func (client *Client) GetModes() (map[string]bool, error)   { return client.runtime.getModes() }
+func (client *Client) GetColors() (TerminalColors, error)   { return client.runtime.getColors() }
+func (client *Client) GetViewport() (Viewport, error)       { return client.runtime.getViewport() }
+func (client *Client) GetSize() (Size, error)               { return client.runtime.getSize() }
+func (client *Client) GetBellCount() (uint64, error)        { return client.runtime.getBellCount() }
+func (client *Client) GetBellEvents() ([]BellEvent, error)  { return client.runtime.getBellEvents() }
+func (client *Client) GetProgressBar() (ProgressBar, error) { return client.runtime.getProgressBar() }
+
+func (client *Client) WaitProgressBar(expected ProgressBarMatch, options WaitOptions) error {
+	return client.wait("wait.progress_bar", options.Timeout, client.options.Timeouts.Text, func(timeout *time.Duration) error {
+		return client.runtime.waitProgressBar(expected, timeout)
+	})
+}
+
+func (client *Client) ExpectProgressBar(expected ProgressBarMatch, options WaitOptions) error {
+	return client.wait("expect.progress_bar", options.Timeout, client.options.Timeouts.Text, func(timeout *time.Duration) error {
+		return client.runtime.expectProgressBar(expected, timeout)
+	})
+}
 
 // Scroll moves through native history. Positive lines show older output.
 func (client *Client) Scroll(lines int32) error { return client.runtime.scroll(lines) }

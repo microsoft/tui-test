@@ -8,6 +8,81 @@ use serde::{Deserialize, Serialize};
 use crate::diagnostics::{FailureArtifactRef, FailureDetails, FailureObservation, FailureReport};
 use crate::shell::Shell;
 
+/// The application progress state from OSC 9;4.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProgressState {
+    #[default]
+    Inactive,
+    Normal,
+    Error,
+    Indeterminate,
+    Paused,
+}
+
+impl ProgressState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Inactive => "inactive",
+            Self::Normal => "normal",
+            Self::Error => "error",
+            Self::Indeterminate => "indeterminate",
+            Self::Paused => "paused",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgressBar {
+    pub state: ProgressState,
+    pub progress: Option<u8>,
+}
+
+impl Default for ProgressBar {
+    fn default() -> Self {
+        Self {
+            state: ProgressState::Inactive,
+            progress: Some(0),
+        }
+    }
+}
+
+impl ProgressBar {
+    #[cfg(any(feature = "ghostty", feature = "rio"))]
+    pub(crate) fn update(&mut self, state: ProgressState, progress: Option<u8>) {
+        self.state = state;
+        if state == ProgressState::Inactive {
+            self.progress = Some(0);
+        } else if state != ProgressState::Indeterminate && progress.is_some() {
+            self.progress = progress;
+        }
+    }
+}
+
+/// Only supplied fields participate in a progress assertion.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProgressBarMatch {
+    pub state: Option<ProgressState>,
+    pub progress: Option<u8>,
+}
+
+impl ProgressBarMatch {
+    pub fn validate(&self) -> Result<(), TuiTestError> {
+        if self.progress.is_some_and(|value| value > 100) {
+            return Err(TuiTestError::usage("progress must be between 0 and 100"));
+        }
+        Ok(())
+    }
+
+    pub fn matches(&self, actual: &ProgressBar) -> bool {
+        self.state.is_none_or(|value| value == actual.state)
+            && self
+                .progress
+                .is_none_or(|value| Some(value) == actual.progress)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AutomaticRecordingMode {
@@ -661,6 +736,15 @@ pub enum Operation {
     GetClipboard,
     GetBellCount,
     GetBellEvents,
+    GetProgressBar,
+    WaitProgressBar {
+        expected: ProgressBarMatch,
+        timeout_ms: Option<u64>,
+    },
+    ExpectProgressBar {
+        expected: ProgressBarMatch,
+        timeout_ms: Option<u64>,
+    },
     Write {
         data: String,
     },
@@ -811,6 +895,8 @@ impl Operation {
         matches!(
             self,
             Self::WaitTitle { .. }
+                | Self::WaitProgressBar { .. }
+                | Self::ExpectProgressBar { .. }
                 | Self::WaitClipboard { .. }
                 | Self::WaitClipboardMatch { .. }
                 | Self::WaitIdle { .. }
@@ -866,6 +952,7 @@ pub enum OperationResult {
     Viewport(Viewport),
     BellCount(u64),
     BellEvents(Vec<BellEvent>),
+    ProgressBar(ProgressBar),
     Snapshot(SnapshotResult),
     Screenshot(ScreenshotResult),
     Recording(String),
@@ -1098,6 +1185,7 @@ pub struct EffectiveTimeouts {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct State {
+    pub progress_bar: Option<ProgressBar>,
     pub session_shell: Option<String>,
     pub cols: u16,
     pub rows: u16,

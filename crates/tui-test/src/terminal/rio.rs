@@ -196,6 +196,7 @@ struct CaptureProxy {
     colors: ColorState,
     clipboard: Arc<Mutex<Clipboard>>,
     bells: BellTracker,
+    progress: Arc<Mutex<crate::api::ProgressBar>>,
 }
 
 impl EventListener for CaptureProxy {
@@ -230,6 +231,21 @@ impl EventListener for CaptureProxy {
                 self.push(format(&text).into_bytes());
             }
             RioEvent::Bell(_) => self.bells.ring(),
+            RioEvent::ProgressReport(report) => {
+                use crate::api::ProgressState;
+                use rio_vt::event::ProgressState as Native;
+                let state = match report.state {
+                    Native::Remove => ProgressState::Inactive,
+                    Native::Set => ProgressState::Normal,
+                    Native::Error => ProgressState::Error,
+                    Native::Indeterminate => ProgressState::Indeterminate,
+                    Native::Pause => ProgressState::Paused,
+                };
+                self.progress
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .update(state, report.progress);
+            }
             _ => {}
         }
     }
@@ -245,6 +261,7 @@ impl CaptureProxy {
 }
 
 pub struct RioEmu {
+    progress: Arc<Mutex<crate::api::ProgressBar>>,
     term: Crosswords<CaptureProxy>,
     processor: Processor,
     pending: Arc<Mutex<Vec<u8>>>,
@@ -271,11 +288,13 @@ impl RioEmu {
         let pending = Arc::new(Mutex::new(Vec::new()));
         let colors = ColorState::new(profile);
         let clipboard = Arc::new(Mutex::new(Clipboard::default()));
+        let progress = Arc::new(Mutex::new(crate::api::ProgressBar::default()));
         let proxy = CaptureProxy {
             pending: Arc::clone(&pending),
             colors: colors.clone(),
             clipboard: Arc::clone(&clipboard),
             bells,
+            progress: Arc::clone(&progress),
         };
         Self {
             term: Crosswords::new(
@@ -290,6 +309,7 @@ impl RioEmu {
             pending,
             colors,
             clipboard,
+            progress,
             clipboard_validator: ClipboardValidator::new(),
             cols,
             rows,
@@ -315,6 +335,10 @@ impl RioEmu {
 }
 
 impl Emulator for RioEmu {
+    fn progress_bar(&self) -> Option<crate::api::ProgressBar> {
+        Some(*self.progress.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
     fn process(&mut self, bytes: &[u8]) {
         self.clipboard_validator.process(bytes);
         self.processor.advance(&mut self.term, bytes);
@@ -476,6 +500,14 @@ impl Emulator for RioEmu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_progress_reports() {
+        crate::terminal::conformance::native_progress_reports(
+            &mut RioEmu::new(10, 2, &Profile::default()),
+            false,
+        );
+    }
 
     #[test]
     fn scrollback_cursor_matches_native_rio_visibility() {

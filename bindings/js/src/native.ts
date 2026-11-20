@@ -7,6 +7,8 @@ import type {
   SessionContext,
   TraceOptions,
   BellEvent,
+  ProgressBar,
+  ProgressBarMatch,
   Cell,
   ClipboardWaitOptions,
   Cursor,
@@ -348,6 +350,18 @@ export class NativeRuntime {
 
   getTitle(): Promise<string | null> {
     return this.#call((session) => session.getTitle());
+  }
+
+  getProgressBar(): Promise<ProgressBar> {
+    return this.#call((session) => session.getProgressBar());
+  }
+
+  waitProgressBar(expected: import("./types.js").ProgressBarMatch, timeoutMs?: number): Promise<void> {
+    return this.#call((session) => session.waitProgressBar(expected as ProgressBarMatch, timeoutMs));
+  }
+
+  expectProgressBar(expected: import("./types.js").ProgressBarMatch, timeoutMs?: number): Promise<void> {
+    return this.#call((session) => session.expectProgressBar(expected as ProgressBarMatch, timeoutMs));
   }
 
   getClipboard(): Promise<string> {

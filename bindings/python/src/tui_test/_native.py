@@ -134,9 +134,10 @@ def _copy(value):
     """Copy every borrowed field before the result allocation is released."""
     if isinstance(value, abi.TuiString):
         return _text(value)
-    if isinstance(value, (abi.TuiOptionalU64, abi.TuiOptionalI32,
-                          abi.TuiOptionalBool, abi.TuiOptionalF64)):
-        return value.value if value.present else None
+    if type(value).__name__.startswith("TuiOptional"):
+        if not value.present:
+            return None
+        return _copy(value.value) if isinstance(value.value, C.Structure) else value.value
     if isinstance(value, abi.TuiColor):
         if value.kind == 0:
             return "default"
@@ -469,6 +470,19 @@ class NativeSession:
 
     async def get_title(self):
         return await self._call("get_title", kind="text")
+
+    async def get_progress_bar(self):
+        return await self._call("get_progress_bar", kind="progress_bar")
+
+    async def wait_progress_bar(self, state, progress, timeout_ms):
+        expected = abi.TuiProgressBarMatch(
+            state=_string(state), progress=_optional(progress, "progress", 8))
+        return await self._call("wait_progress_bar", expected, _optional(timeout_ms))
+
+    async def expect_progress_bar(self, state, progress, timeout_ms):
+        expected = abi.TuiProgressBarMatch(
+            state=_string(state), progress=_optional(progress, "progress", 8))
+        return await self._call("expect_progress_bar", expected, _optional(timeout_ms))
 
     async def get_clipboard(self):
         return await self._call("get_clipboard", kind="text")

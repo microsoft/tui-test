@@ -95,15 +95,27 @@ func nativeMatches(result *abiResult) []TextMatch {
 }
 
 func nativeState(value abiState) State {
+	var progress *ProgressBar
+	if value.progressBar.present {
+		progress = pointerTo(nativeProgressBar(value.progressBar.value))
+	}
 	modes := make(map[string]bool, int(value.modesLen))
 	for _, mode := range unsafe.Slice(value.modes, int(value.modesLen)) { //nolint:gosec // Rust-owned result remains live while values are copied.
 		modes[nativeText(mode.name)] = mode.enabled
 	}
-	return State{SessionShell: nativeOptionalText(value.sessionShell), Cols: value.cols, Rows: value.rows, Cursor: nativeCursor(value.cursor), Title: nativeOptionalText(value.title), Cwd: nativeOptionalText(value.cwd), LastCommand: nativeOptionalText(value.lastCommand), LastExit: nativeInt(value.lastExit), ExitSignal: nativeOptionalText(value.exitSignal), Exited: nativeInt(value.exited), Ready: value.ready, BellCount: value.bellCount, Modes: modes, MouseMode: nativeText(value.mouseMode), Colors: nativeTerminalColors(value.colors), Text: nativeText(value.text), Timeouts: EffectiveTimeouts{Text: nativeMilliseconds(value.timeouts.text.value), Idle: nativeMilliseconds(value.timeouts.idle.value), Command: nativeMilliseconds(value.timeouts.command.value), Exit: nativeMilliseconds(value.timeouts.exit.value), Ready: nativeMilliseconds(value.timeouts.ready.value)}}
+	return State{SessionShell: nativeOptionalText(value.sessionShell), Cols: value.cols, Rows: value.rows, Cursor: nativeCursor(value.cursor), Title: nativeOptionalText(value.title), Cwd: nativeOptionalText(value.cwd), LastCommand: nativeOptionalText(value.lastCommand), LastExit: nativeInt(value.lastExit), ExitSignal: nativeOptionalText(value.exitSignal), Exited: nativeInt(value.exited), Ready: value.ready, BellCount: value.bellCount, ProgressBar: progress, Modes: modes, MouseMode: nativeText(value.mouseMode), Colors: nativeTerminalColors(value.colors), Text: nativeText(value.text), Timeouts: EffectiveTimeouts{Text: nativeMilliseconds(value.timeouts.text.value), Idle: nativeMilliseconds(value.timeouts.idle.value), Command: nativeMilliseconds(value.timeouts.command.value), Exit: nativeMilliseconds(value.timeouts.exit.value), Ready: nativeMilliseconds(value.timeouts.ready.value)}}
 }
 
 func nativeCursor(value abiCursor) Cursor {
 	return Cursor{X: value.x, Y: value.y, Visible: value.visible, Shape: nativeText(value.shape), Color: nativeText(value.color)}
+}
+
+func nativeProgressBar(value abiProgressBar) ProgressBar {
+	var progress *uint8
+	if value.progress.present {
+		progress = pointerTo(uint8(value.progress.value))
+	}
+	return ProgressBar{State: ProgressState(nativeText(value.state)), Progress: progress}
 }
 
 func nativeTerminalColors(value abiTerminalColors) TerminalColors {

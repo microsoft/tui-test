@@ -348,6 +348,13 @@ Asciicast remains a timestamped output stream; FPS sampling does not change it.
 
 `ExpectSnapshot` returns `SnapshotPassed`, `SnapshotWritten`, or `SnapshotUpdated`. Set `SnapshotOptions.Update` only when you intend to update the baseline. Snapshot options also control style and title inclusion and the snapshot working directory.
 
+## Progress bars
+
+`GetProgressBar()` returns a `ProgressBar` from OSC 9;4 reports.
+`WaitProgressBar()` and `ExpectProgressBar()` compare non-nil `ProgressBarMatch` fields and use the text timeout.
+Only Ghostty and Rio support these methods. Other backends return `UsageError` and expose `State.ProgressBar=nil`.
+See [application progress](../../README.md#application-progress) for states and a runnable Rust example.
+
 ## Test cleanup
 
 The `tuitesttest` package creates unique sessions and registers cleanup before starting the terminal. It closes the session when the test ends, including after a fatal test failure.

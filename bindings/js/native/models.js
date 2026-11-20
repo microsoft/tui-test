@@ -32,7 +32,12 @@ BellEvent: {
 "sequence": ["sequence", "u64"],
 "elapsed_ms": ["elapsed_ms", "u64"],
 },
+ProgressBar: {
+"state": ["state", "ProgressState"],
+"progress": ["progress", "Option<u8>"],
+},
 State: {
+"progress_bar": ["progress_bar", "Option<ProgressBar>"],
 "session_shell": ["session_shell", "Option<String>"],
 "cols": ["cols", "u16"],
 "rows": ["rows", "u16"],
@@ -250,6 +255,10 @@ TitleOptions: {
 "timeoutMs": ["timeout_ms", "Option<u64>"],
 "not": ["not", "Option<bool>"],
 },
+ProgressBarMatch: {
+"state": ["state", "Option<ProgressState>"],
+"progress": ["progress", "Option<u8>"],
+},
 ClipboardWaitOptions: {
 "regex": ["regex", "Option<bool>"],
 "timeoutMs": ["timeout_ms", "Option<u64>"],
@@ -313,6 +322,13 @@ Ghostty: "ghostty",
 Rio: "rio",
 Xtermjs: "xtermjs",
 },
+ProgressState: {
+Inactive: "inactive",
+Normal: "normal",
+Error: "error",
+Indeterminate: "indeterminate",
+Paused: "paused",
+},
 Shell: {
 Bash: "bash",
 Powershell: "powershell",
@@ -358,6 +374,7 @@ Before: "before",
 },
 };
 export const Backend = enums.Backend;
+export const ProgressState = enums.ProgressState;
 export const Shell = enums.Shell;
 export const RecordingFormat = enums.RecordingFormat;
 export const SnapshotResult = enums.SnapshotResult;
@@ -381,6 +398,7 @@ getOutput: { result: "Output", short: true, args: [] },
 getExitCode: { result: "ExitCode", short: true, args: [] },
 getCwd: { result: "Cwd", short: true, args: [] },
 getTitle: { result: "Title", short: true, args: [] },
+getProgressBar: { result: "ProgressBar", short: true, args: [] },
 getClipboard: { result: "Clipboard", short: true, args: [] },
 getCursor: { result: "Cursor", short: true, args: [] },
 getModes: { result: "Modes", short: true, args: [] },
@@ -409,6 +427,8 @@ resize: { result: "Unit", args: [["cols", "u16"],["rows", "u16"],] },
 signal: { result: "Unit", args: [["name", "String"],] },
 waitTitle: { result: "Unit", args: [["text", "String"],["options", "Option<TitleOptions>"],] },
 expectTitle: { result: "Unit", args: [["text", "String"],["options", "Option<TitleOptions>"],] },
+waitProgressBar: { result: "Unit", args: [["expected", "ProgressBarMatch"],["timeoutMs", "Option<u64>"],] },
+expectProgressBar: { result: "Unit", args: [["expected", "ProgressBarMatch"],["timeoutMs", "Option<u64>"],] },
 waitClipboard: { result: "Unit", args: [["text", "Option<String>"],["options", "Option<ClipboardWaitOptions>"],] },
 waitIdle: { result: "Unit", args: [["timeoutMs", "Option<u64>"],] },
 waitCommand: { result: "Unit", args: [["timeoutMs", "Option<u64>"],] },

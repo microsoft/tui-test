@@ -8,6 +8,7 @@ Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
 MouseButton = Literal["left", "middle", "right"]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
+ProgressState = Literal["inactive", "normal", "error", "indeterminate", "paused"]
 RecordingFormat = Literal["apng", "gif", "mp4", "cast"]
 TraceMode = Literal["off", "on-failure", "on"]
 LocatorDirection = Literal["within", "after", "before"]
@@ -207,6 +208,18 @@ class BellEvent:
 
 
 @dataclass
+class ProgressBar:
+    state: ProgressState = "inactive"
+    progress: Optional[int] = 0
+
+
+@dataclass
+class ProgressBarMatch:
+    state: Optional[ProgressState] = None
+    progress: Optional[int] = None
+
+
+@dataclass
 class TextStyle:
     foreground: Optional[str] = None
     background: Optional[str] = None
@@ -267,6 +280,7 @@ class State:
     text: str
     session_shell: Optional[str]
     bell_count: int = 0
+    progress_bar: Optional[ProgressBar] = None
     modes: Dict[str, bool] = field(default_factory=dict)
     mouse_mode: str = "none"
     colors: Dict[str, Any] = field(default_factory=dict)
@@ -285,6 +299,7 @@ class State:
             exited=d.get("exited"),
             ready=d.get("ready", False),
             bell_count=d.get("bell_count", 0),
+            progress_bar=ProgressBar(**d["progress_bar"]) if d.get("progress_bar") is not None else None,
             modes=d.get("modes", {}),
             mouse_mode=d.get("mouse_mode", "none"),
             colors=d.get("colors", {}),

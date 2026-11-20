@@ -26,6 +26,8 @@ from tui_test import (
     InternalError,
     NoSessionError,
     Profile,
+    ProgressBar,
+    ProgressBarMatch,
     RenderStyle,
     RecordingCursorStyle,
     TuiTest,
@@ -65,6 +67,32 @@ def run(coro):
 
 
 class IntegrationTests(unittest.TestCase):
+    def test_progress_bar(self):
+        async def scenario():
+            async with self._client(backend="ghostty") as terminal:
+                await terminal.run(
+                    sys.executable, "-u", "-c",
+                    "import sys; sys.stdout.write('\\x1b]9;4;1;50\\x07'); sys.stdout.flush(); "
+                    "input(); sys.stdout.write('\\x1b]9;4;3\\x07'); sys.stdout.flush(); sys.stdin.read()",
+                    wait_ready=False,
+                )
+                expected = ProgressBarMatch(state="normal", progress=50)
+                await terminal.wait_progress_bar(expected)
+                self.assertEqual(await terminal.get_progress_bar(), ProgressBar("normal", 50))
+                self.assertEqual((await terminal.state()).progress_bar, ProgressBar("normal", 50))
+                await terminal.expect_progress_bar(ProgressBarMatch(progress=50))
+                await terminal.wait_progress_bar()
+                with self.assertRaises(ExpectationError) as caught:
+                    await terminal.expect_progress_bar(ProgressBarMatch(state="paused"), timeout=0)
+                self.assertEqual(caught.exception.details.operation, "expect.progress_bar")
+                with self.assertRaises(UsageError):
+                    await terminal.wait_progress_bar(ProgressBarMatch(progress=101))
+                self.assertEqual(expected, ProgressBarMatch(state="normal", progress=50))
+                await terminal.submit("next")
+                await terminal.wait_progress_bar(ProgressBarMatch(state="indeterminate"))
+                self.assertEqual(await terminal.get_progress_bar(), ProgressBar("indeterminate", 50))
+        run(scenario())
+
     def _client(self, **kwargs):
         return TuiTest.ephemeral("pytest", **kwargs)
 
@@ -132,6 +160,7 @@ class IntegrationTests(unittest.TestCase):
                 await su.expect_exit_code(0)
                 st = await su.state()
                 self.assertGreater(st.cols, 0)
+                self.assertIsNone(st.progress_bar)
 
         run(scenario())
 

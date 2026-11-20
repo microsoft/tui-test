@@ -42,6 +42,8 @@ from .types import (
     TraceOptions,
     Backend,
     BellEvent,
+    ProgressBar,
+    ProgressBarMatch,
     Cell,
     Cursor,
     Viewport,
@@ -1102,6 +1104,23 @@ class TuiTest:
 
     async def get_title(self) -> Optional[str]:
         return await self._await(self._native.get_title())
+
+    async def get_progress_bar(self) -> ProgressBar:
+        return ProgressBar(**await self._await(self._native.get_progress_bar()))
+
+    async def wait_progress_bar(
+        self, expected: Optional[ProgressBarMatch] = None, *, timeout: Optional[int] = None
+    ) -> None:
+        expected = expected if expected is not None else ProgressBarMatch()
+        await self._guarded("wait.progress_bar", self._native.wait_progress_bar(
+            expected.state, expected.progress, self._timeout("text", timeout)))
+
+    async def expect_progress_bar(
+        self, expected: Optional[ProgressBarMatch] = None, *, timeout: Optional[int] = None
+    ) -> None:
+        expected = expected if expected is not None else ProgressBarMatch()
+        await self._guarded("expect.progress_bar", self._native.expect_progress_bar(
+            expected.state, expected.progress, self._timeout("text", timeout)))
 
     async def get_clipboard(self) -> str:
         return await self._await(self._native.get_clipboard())

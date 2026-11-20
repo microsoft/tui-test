@@ -428,6 +428,11 @@ pub trait Emulator: Send {
         None
     }
 
+    /// Native progress state, or `None` when the backend does not report it.
+    fn progress_bar(&self) -> Option<crate::api::ProgressBar> {
+        None
+    }
+
     /// Drain bytes the emulator wants written back to the PTY (device
     /// attribute replies, cursor position reports, and similar). The caller
     /// forwards these to the PTY.

@@ -368,9 +368,45 @@ func (runtime *Session) GetBellEvents() ([]BellEvent, error) {
 	if err := nativeError(result); err != nil {
 		return nil, err
 	}
+
 	return nativeBellEvents(result), nil
 }
 
+func (runtime *Session) GetProgressBar() (ProgressBar, error) {
+	var value ProgressBar
+	err := runtime.read(func(session abiString, _ *nativeMemory) *abiResult {
+		return nativeFunctions.GetProgressBar(session)
+	}, func(result *abiResult) { value = nativeProgressBar(result.progressBar) })
+	return value, err
+}
+
+func (runtime *Session) progressBar(expected ProgressBarMatch, timeout *time.Duration, expect bool) error {
+	duration, err := nativeDuration(timeout)
+	if err != nil {
+		return err
+	}
+	return runtime.unit(func(session abiString, memory *nativeMemory) *abiResult {
+		value := abiProgressBarMatch{}
+		if expected.State != nil {
+			value.state = memory.text(string(*expected.State))
+		}
+		if expected.Progress != nil {
+			value.progress = abiOptionalU64{present: true, value: uint64(*expected.Progress)}
+		}
+		if expect {
+			return nativeFunctions.ExpectProgressBar(session, value, duration)
+		}
+		return nativeFunctions.WaitProgressBar(session, value, duration)
+	})
+}
+
+func (runtime *Session) WaitProgressBar(expected ProgressBarMatch, timeout *time.Duration) error {
+	return runtime.progressBar(expected, timeout, false)
+}
+
+func (runtime *Session) ExpectProgressBar(expected ProgressBarMatch, timeout *time.Duration) error {
+	return runtime.progressBar(expected, timeout, true)
+}
 func (runtime *Session) read(call func(abiString, *nativeMemory) *abiResult, read func(*abiResult)) error {
 	memory := nativeMemory{}
 	defer memory.release()
