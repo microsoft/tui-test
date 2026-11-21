@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test vendor.test.mjs release/*.test.mjs"
+    "test": "node --test vendor.test.mjs docs-website.test.mjs release/*.test.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.3",
