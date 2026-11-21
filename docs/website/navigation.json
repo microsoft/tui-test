@@ -9,6 +9,7 @@
       "label": "Getting started",
       "items": [
         "install",
+        "getting-started/ai-agents",
         "getting-started/quickstart",
         "getting-started/testing"
       ]
@@ -26,19 +27,16 @@
     },
     {
       "label": "Capture and debugging",
-      "collapsed": true,
       "items": [
         "capture/screenshots",
         "capture/recordings",
         "capture/tapes",
         "capture/traces",
-        "capture/monitor",
-        "capture/ai-agents"
+        "capture/monitor"
       ]
     },
     {
       "label": "Language APIs",
-      "collapsed": true,
       "items": [
         "api/javascript",
         "api/python",
@@ -51,8 +49,7 @@
       "collapsed": true,
       "items": [
         "reference/cli",
-        "reference/configuration",
-        "contributing"
+        "reference/configuration"
       ]
     }
   ]

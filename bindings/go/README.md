@@ -49,4 +49,4 @@ func main() {
 }
 ```
 
-See the [Go API reference](https://tui-test.dev/docs/api/go/) for client options, locators, cross-compilation, recordings, and `tuitesttest` helpers, or start with [writing and running tests](https://tui-test.dev/docs/getting-started/testing/). For local source checkouts, see [building from source](https://tui-test.dev/docs/contributing/#build-from-source).
+See the [Go API reference](https://tui-test.dev/docs/api/go/) for client options, locators, cross-compilation, recordings, and `tuitesttest` helpers, or start with [writing and running tests](https://tui-test.dev/docs/getting-started/testing/). For local source checkouts, see [`crates/tui-test-ffi/README.md`](https://github.com/microsoft/tui-test/blob/main/crates/tui-test-ffi/README.md#build-and-use).

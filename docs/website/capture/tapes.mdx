@@ -4,7 +4,7 @@ description: Validate and execute declarative VHS-style .tape scripts to generat
 editUrl: false
 ---
 
-The CLI (`tui-test tape`) and the Rust `tui_test::tape` module compile and run a focused subset of the VHS v0.12.1 `.tape` format to export a GIF from an isolated shell session. Python, JavaScript, and Go bindings do not expose a tape API; use [session recordings](/docs/capture/recordings/) when driving captures from code.
+The CLI (`tui-test tape`) and the Rust `tui_test::tape` module compile and run a subset of [Charmbracelet VHS's supported tape commands](https://github.com/charmbracelet/vhs#vhs-command-reference) to export a GIF from an isolated shell session. Python, JavaScript, and Go bindings do not expose a tape API; use [session recordings](/docs/capture/recordings/) when driving captures from code.
 
 ## Write a tape
 
@@ -51,4 +51,4 @@ tui-test tape run crates/tui-test/tests/fixtures/tape/run.tape
 
 ## Rust `tui_test::tape` module
 
-In Rust, `tui_test::tape` exposes `parse`, `load`, `compile`, `check`, and `run`. Parsing and compilation work without optional Cargo features; `check` and `run` require `recording-raster` (plus `recording-font-jetbrains-mono` to bundle the default font). For the full list of supported commands, settings, and VHS differences, see [`references/tape.md`](https://github.com/microsoft/tui-test/blob/main/references/tape.md) and [`docs.rs/tui-test-rs/latest/tui_test/tape`](https://docs.rs/tui-test-rs/latest/tui_test/tape/).
+In Rust, `tui_test::tape` exposes `parse`, `load`, `compile`, `check`, and `run`. Parsing and compilation work without optional Cargo features; `check` and `run` require `recording-raster` (plus `recording-font-jetbrains-mono` to bundle the default font). `tui-test` implements a subset of the [VHS command reference](https://github.com/charmbracelet/vhs#vhs-command-reference) (based on VHS v0.12.1) rather than every VHS directive; see [`references/tape.md`](https://github.com/microsoft/tui-test/blob/main/references/tape.md) and [`docs.rs/tui-test-rs/latest/tui_test/tape`](https://docs.rs/tui-test-rs/latest/tui_test/tape/) for the exact supported commands, settings, and differences.

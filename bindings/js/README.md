@@ -21,4 +21,4 @@ try {
 }
 ```
 
-See the [JavaScript and TypeScript API reference](https://tui-test.dev/docs/api/javascript/) for all methods, test helpers, recordings, and platform details, or start with [writing and running tests](https://tui-test.dev/docs/getting-started/testing/) and [locators](https://tui-test.dev/docs/guides/locators/). For local source builds, see [building from source](https://tui-test.dev/docs/contributing/#build-from-source).
+See the [JavaScript and TypeScript API reference](https://tui-test.dev/docs/api/javascript/) for all methods, test helpers, recordings, and platform details, or start with [writing and running tests](https://tui-test.dev/docs/getting-started/testing/) and [locators](https://tui-test.dev/docs/guides/locators/). For local source builds, see [`crates/tui-test-ffi/README.md`](https://github.com/microsoft/tui-test/blob/main/crates/tui-test-ffi/README.md#build-and-use).

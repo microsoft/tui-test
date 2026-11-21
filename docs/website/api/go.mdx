@@ -26,7 +26,7 @@ On first use, the module verifies and extracts the matching platform library int
 
 Linux builds select the GNU or musl engine automatically at runtime. Cross-compile for glibc Linux with `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build .`. When cross-compiling a musl binary from a non-musl host, also set the dynamic linker (`-ldflags '-I /lib/ld-musl-x86_64.so.1'` or `/lib/ld-musl-aarch64.so.1`).
 
-For read-only filesystems or local source checkouts (which do not embed release archives), set `TUI_TEST_NATIVE_LIBRARY` to the absolute path of `libtui_test_ffi.so`, `libtui_test_ffi.dylib`, or `tui_test_ffi.dll`. An invalid override fails immediately rather than falling back. See [building from source](/docs/contributing/#build-from-source).
+For read-only filesystems or local source checkouts (which do not embed release archives), set `TUI_TEST_NATIVE_LIBRARY` to the absolute path of `libtui_test_ffi.so`, `libtui_test_ffi.dylib`, or `tui_test_ffi.dll`. An invalid override fails immediately rather than falling back. See [`crates/tui-test-ffi/README.md`](https://github.com/microsoft/tui-test/blob/main/crates/tui-test-ffi/README.md#build-and-use).
 
 ## Quick start
 
