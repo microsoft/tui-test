@@ -45,11 +45,11 @@ export function validateLibrary(data, target) {
   if (!valid) throw new Error(`Library format or architecture does not match ${target}`);
 }
 
-export function archiveBytes(entries) {
+export function archiveBytes(entries, executablePaths = new Set()) {
   const blocks = [];
   for (const [name, data] of [...entries].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     const header = new Header({
-      path: name, size: data.length, mode: 0o644, uid: 0, gid: 0,
+      path: name, size: data.length, mode: executablePaths.has(name) ? 0o755 : 0o644, uid: 0, gid: 0,
       mtime: new Date(0), type: "File", uname: "", gname: "",
     });
     if (header.encode()) throw new Error(`Archive path requires extended headers: ${name}`);
@@ -59,8 +59,8 @@ export function archiveBytes(entries) {
   return gzipSync(Buffer.concat(blocks));
 }
 
-export function writeArchive(filename, entries) {
-  const data = archiveBytes(entries);
+export function writeArchive(filename, entries, executablePaths = new Set()) {
+  const data = archiveBytes(entries, executablePaths);
   fs.writeFileSync(filename, data);
   fs.writeFileSync(`${filename}.sha256`, `${sha256(data)}  ${path.basename(filename)}\n`);
 }

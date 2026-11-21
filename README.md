@@ -49,12 +49,18 @@ You can also download a binary from [GitHub Releases](https://github.com/microso
 | Python 3.8+ | `pip install tui-test` | [Python API](bindings/python/README.md) |
 | Node 20+ | `npm install @microsoft/tui-test` | [JavaScript API](bindings/js/README.md) |
 | Go 1.26+ | `go get github.com/microsoft/tui-test/bindings/go@v0.1.1` | [Go API](bindings/go/README.md) |
+| C / C++ | Download the matching C SDK from GitHub Releases | [C SDK](bindings/c/README.md) |
 
 Add the Rust `recording-raster` feature for APNG, GIF, and MP4 output. It uses installed fonts; `recording-font-jetbrains-mono*` bundles a font.
 
 Go, Python, and JavaScript use one [native adapter crate](crates/tui-test-ffi/README.md).
 All three use its generated C ABI declarations through purego, ctypes, and Koffi, respectively.
 Set `TUI_TEST_NATIVE_LIBRARY` to select a matching library explicitly.
+
+The C SDK packages the same shared engine with its generated header, CMake
+integration, and runnable C/C++ examples. SDK-only and combined CLI-plus-SDK
+archives are available for the seven native targets. These are shared libraries,
+not static libraries.
 
 ## Quick start
 

@@ -78,6 +78,29 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
       - run: cargo build -p tui-test-cli -p tui-test-ffi
+      - name: Package and test the C SDK and combined CLI archive
+        shell: bash
+        run: |
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          version="$(node -p "require('./bindings/js/package.json').version")"
+          import_library=()
+          case "$RUNNER_OS" in
+            Linux) library=libtui_test_ffi.so; executable=tui-test ;;
+            macOS) library=libtui_test_ffi.dylib; executable=tui-test ;;
+            Windows)
+              library=tui_test_ffi.dll; executable=tui-test.exe
+              import_library=(--import-library target/debug/tui_test_ffi.dll.lib)
+              ;;
+          esac
+          node .github/scripts/release/package-c-sdk.mjs \
+            --library "target/debug/$library" --target "$target" "${import_library[@]}"
+          node .github/scripts/test-c-sdk.mjs \
+            --archive "target/c-sdk-packages/tui-test-c-sdk-$version-$target.tar.gz"
+          node .github/scripts/release/package-c-sdk.mjs \
+            --sdk "target/c-sdk-packages/tui-test-c-sdk-$version-$target.tar.gz" \
+            --cli "target/debug/$executable" --target "$target"
+          node .github/scripts/test-c-sdk.mjs \
+            --archive "target/c-sdk-packages/tui-test-with-c-sdk-$version-$target.tar.gz"
       - run: cargo test --workspace -- --test-threads=1
       # The recording renderer and its font catalog are behind a feature that
       # is off by default, so the line above never compiles them in.
