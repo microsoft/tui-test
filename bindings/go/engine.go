@@ -13,7 +13,7 @@ type nativeRuntime struct{ session *native.Session }
 func newNativeRuntime(name string, options ClientOptions) (*nativeRuntime, error) {
 	var nativeRecording *native.AutomaticRecording
 	if options.Recording != nil {
-		nativeRecording = &native.AutomaticRecording{Mode: native.RecordingMode(options.Recording.Mode), Directory: options.Recording.Directory}
+		nativeRecording = &native.AutomaticRecording{Mode: native.RecordingMode(options.Recording.Mode), Directory: options.Recording.Directory, Format: native.RecordingFormat(options.Recording.Format)}
 	}
 	var artifacts *native.ArtifactOptions
 	if options.Artifacts != nil {
@@ -270,7 +270,7 @@ func (runtime *nativeRuntime) findLocator(query locatorQuery, requireOne bool) (
 func engineSpawnOptions(options SpawnOptions) native.SpawnOptions {
 	var recording *native.AutomaticRecording
 	if options.Recording != nil {
-		recording = &native.AutomaticRecording{Mode: native.RecordingMode(options.Recording.Mode), Directory: options.Recording.Directory}
+		recording = &native.AutomaticRecording{Mode: native.RecordingMode(options.Recording.Mode), Directory: options.Recording.Directory, Format: native.RecordingFormat(options.Recording.Format)}
 	}
 	var profile *native.Profile
 	if options.Profile != nil {

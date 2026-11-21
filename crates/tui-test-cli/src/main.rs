@@ -1312,7 +1312,7 @@ fn spawn_detached(exe: &Path, session: &str, verbose: bool) -> anyhow::Result<()
     Ok(())
 }
 
-/// Stream a session's recording (asciinema v2 cast) to stdout.
+/// Stream a session's recording (asciicast v2 or v3) to stdout.
 fn get_recording(session: String, explicit_config: Option<&Path>) -> i32 {
     let socket = config::socket_name(&session);
     let live_path = if ipc::is_running(&socket) {

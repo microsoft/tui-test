@@ -299,10 +299,12 @@ _UNSET = object()
 class NativeSession:
     def __init__(self, name, recording_directory=None, artifact_directory=None,
                  artifact_mode=None, artifact_include_recording=False,
-                 trace_mode=None, trace_directory=None, context=None, recording_mode=None):
+                 trace_mode=None, trace_directory=None, context=None, recording_mode=None,
+                 recording_format=None):
         self.name = name
         self._recording_directory = recording_directory
         self._recording_mode = recording_mode
+        self._recording_format = recording_format
         self._context = dict(
             name=name, artifact_directory=artifact_directory, artifact_mode=artifact_mode,
             artifact_include_recording=artifact_include_recording,
@@ -339,12 +341,14 @@ class NativeSession:
                 )
             )), recording_directory=_string(self._recording_directory),
             recording_mode=_string(self._recording_mode), style=_style(style),
+            recording_format=_string(self._recording_format),
         )
 
     async def open(self, shell, backend, cols, rows, cwd, env, wait_ready, restart,
                    profile_scrollback, profile_colors, text_timeout, idle_timeout,
                    command_timeout, exit_timeout, ready_timeout, screen_history_limit, style=None,
-                   *, recording_directory=_UNSET, recording_mode=_UNSET, context=None):
+                   *, recording_directory=_UNSET, recording_mode=_UNSET,
+                   recording_format=_UNSET, context=None):
         options = self._open_options(
             shell, backend, cols, rows, cwd, env, wait_ready, restart,
             profile_scrollback, profile_colors, text_timeout, idle_timeout,
@@ -354,6 +358,8 @@ class NativeSession:
             options.recording_directory = _string(recording_directory)
         if recording_mode is not _UNSET:
             options.recording_mode = _string(recording_mode)
+        if recording_format is not _UNSET:
+            options.recording_format = _string(recording_format)
         session = self._session(screen_history_limit, context)
         return await _background(
             lambda: _invoke("open_ptr", (session, C.byref(options)), "open"),
@@ -362,7 +368,8 @@ class NativeSession:
     async def run(self, program, args, backend, cols, rows, cwd, env, wait_ready, restart,
                   profile_scrollback, profile_colors, text_timeout, idle_timeout,
                   command_timeout, exit_timeout, ready_timeout, screen_history_limit, style=None,
-                  *, recording_directory=_UNSET, recording_mode=_UNSET, context=None):
+                  *, recording_directory=_UNSET, recording_mode=_UNSET,
+                  recording_format=_UNSET, context=None):
         options = self._open_options(
             None, backend, cols, rows, cwd, env, wait_ready, restart,
             profile_scrollback, profile_colors, text_timeout, idle_timeout,
@@ -372,6 +379,8 @@ class NativeSession:
             options.recording_directory = _string(recording_directory)
         if recording_mode is not _UNSET:
             options.recording_mode = _string(recording_mode)
+        if recording_format is not _UNSET:
+            options.recording_format = _string(recording_format)
         session = self._session(screen_history_limit, context)
         arguments = (session, C.byref(options), _string(program), _strings(args), len(args))
         return await _background(

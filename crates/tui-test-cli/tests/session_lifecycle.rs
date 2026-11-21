@@ -1140,6 +1140,43 @@ fn get_recording_flushes_queued_output_before_reading() {
 }
 
 #[test]
+fn recording_supports_explicit_and_automatic_cast_versions() {
+    for (format, version) in [("cast", 2), ("cast3", 3)] {
+        let sandbox = Sandbox::new(format);
+        let config = sandbox.home.join("recording.toml");
+        std::fs::write(
+            &config,
+            format!(
+                "[recording]\nformat = \"{format}\"\n\
+             [trace]\nmode = \"on\"\ndirectory = \"traces\"\n"
+            ),
+        )
+        .unwrap();
+        sandbox.ok(&["open", "--config", config.to_str().unwrap()]);
+        let path = sandbox.home.join("explicit.cast");
+        sandbox.ok(&[
+            "record",
+            "start",
+            path.to_str().unwrap(),
+            "--format",
+            format,
+        ]);
+        sandbox.ok(&["submit", "echo cast-version-marker"]);
+        sandbox.ok(&["wait", "command", "--timeout", "30000"]);
+        sandbox.ok(&["record", "stop"]);
+        for content in [
+            std::fs::read_to_string(path).unwrap(),
+            sandbox.ok(&["get-recording"]),
+        ] {
+            let header: serde_json::Value =
+                serde_json::from_str(content.lines().next().unwrap()).unwrap();
+            assert_eq!(header["version"], version);
+            assert!(content.contains("cast-version-marker"));
+        }
+    }
+}
+
+#[test]
 fn relative_recording_path_uses_the_invoking_client_directory() {
     let sandbox = Sandbox::new("recording-client-cwd");
     let daemon_cwd = sandbox.home.join("daemon-cwd");
@@ -1158,6 +1195,9 @@ fn relative_recording_path_uses_the_invoking_client_directory() {
         "recording was not written to {expected:?}"
     );
     assert!(!daemon_cwd.join("relative.cast").exists());
+    let content = std::fs::read_to_string(&expected).unwrap();
+    let header: serde_json::Value = serde_json::from_str(content.lines().next().unwrap()).unwrap();
+    assert_eq!(header["version"], 2);
     let actual = std::path::PathBuf::from(stopped["data"]["path"].as_str().unwrap());
     assert!(actual.is_absolute());
     assert_eq!(
@@ -2264,7 +2304,7 @@ fn automatic_recording_mode_and_directory_come_from_config() {
     let config = sandbox.home.join("recording.toml");
     std::fs::write(
         &config,
-        "[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"off\"\n",
+        "[recording]\ndirectory = \"casts\"\nformat = \"cast3\"\n[trace]\nmode = \"off\"\n",
     )
     .unwrap();
     let config = config.to_str().unwrap();

@@ -322,6 +322,7 @@ def _spawn_context(
         values = cfg.normalize_recording(recording) or {}
         result["recording_directory"] = values.get("directory")
         result["recording_mode"] = values.get("mode")
+        result["recording_format"] = values.get("format")
     if context is not None:
         result["context"] = _context_values(context)
     return result
@@ -799,6 +800,8 @@ class TuiTest:
         native_options = {"context": _context_values(context)} if context is not None else {}
         if recording_values.get("mode") is not None:
             native_options["recording_mode"] = recording_values["mode"]
+        if recording_values.get("format") is not None:
+            native_options["recording_format"] = recording_values["format"]
         self._native = native.NativeSession(
             self._session,
             recording_values.get("directory"),

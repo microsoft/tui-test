@@ -574,6 +574,7 @@ fn automatic_recording_supports_disabled_and_custom_directory() {
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::Disabled,
                 directory: Some(root.clone()),
+                format: None,
             },
             ..OpenOptions::default()
         })
@@ -590,6 +591,7 @@ fn automatic_recording_supports_disabled_and_custom_directory() {
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::Always,
                 directory: Some(root.clone()),
+                format: None,
             },
             ..OpenOptions::default()
         })
@@ -690,6 +692,7 @@ fn restart_preserves_recording_without_a_trace_override_and_honors_an_explicit_o
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::Always,
                 directory: Some(root.clone()),
+                format: None,
             },
             ..Default::default()
         })
@@ -741,6 +744,7 @@ fn on_failure_recording_is_kept_only_after_an_operation_failure() {
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::OnFailure,
                 directory: Some(root.clone()),
+                format: None,
             },
             ..OpenOptions::default()
         })
@@ -756,6 +760,7 @@ fn on_failure_recording_is_kept_only_after_an_operation_failure() {
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::OnFailure,
                 directory: Some(root.clone()),
+                format: None,
             },
             ..OpenOptions::default()
         })
@@ -800,6 +805,7 @@ fn failed_open_recording_is_readable_before_close() {
     options.recording = AutomaticRecording {
         mode: AutomaticRecordingMode::OnFailure,
         directory: Some(root.clone()),
+        format: None,
     };
 
     assert_eq!(session.run(options).unwrap_err().kind, ErrorKind::Assertion);
@@ -1321,6 +1327,7 @@ fn failure_bundle_copies_an_immutable_recording_prefix() {
     options.recording = AutomaticRecording {
         mode: AutomaticRecordingMode::OnFailure,
         directory: Some(recording_root),
+        format: None,
     };
     session.run(options).unwrap();
     session
@@ -1368,6 +1375,7 @@ fn restart_discards_the_previous_recording_path() {
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::Always,
                 directory: Some(root.join("first")),
+                format: None,
             },
             ..OpenOptions::default()
         })
@@ -1382,6 +1390,7 @@ fn restart_discards_the_previous_recording_path() {
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::Always,
                 directory: Some(root.join("second")),
+                format: None,
             },
             ..OpenOptions::default()
         })
@@ -1403,6 +1412,7 @@ fn failed_recorder_initialization_does_not_claim_a_stale_file() {
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::Always,
                 directory: Some(root.join("first")),
+                format: None,
             },
             ..OpenOptions::default()
         })
@@ -1424,6 +1434,7 @@ fn failed_recorder_initialization_does_not_claim_a_stale_file() {
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::OnFailure,
                 directory: Some(blocked),
+                format: None,
             },
             ..OpenOptions::default()
         })
@@ -1446,6 +1457,7 @@ fn failed_process_spawn_does_not_publish_a_recording() {
     options.recording = AutomaticRecording {
         mode: AutomaticRecordingMode::OnFailure,
         directory: Some(root.clone()),
+        format: None,
     };
 
     assert!(session.run(options).is_err());

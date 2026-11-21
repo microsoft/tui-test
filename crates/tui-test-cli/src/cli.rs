@@ -82,7 +82,10 @@ pub enum RecordingFormatArg {
     Apng,
     Gif,
     Mp4,
+    /// Asciicast v2 (also inferred from .cast).
     Cast,
+    /// Asciicast v3 with relative event intervals.
+    Cast3,
 }
 
 impl From<RecordingFormatArg> for RecordingFormat {
@@ -92,6 +95,7 @@ impl From<RecordingFormatArg> for RecordingFormat {
             RecordingFormatArg::Gif => RecordingFormat::Gif,
             RecordingFormatArg::Mp4 => RecordingFormat::Mp4,
             RecordingFormatArg::Cast => RecordingFormat::Cast,
+            RecordingFormatArg::Cast3 => RecordingFormat::Cast3,
         }
     }
 }
@@ -486,7 +490,7 @@ pub enum Command {
         #[command(subcommand)]
         what: HighlightCmd,
     },
-    /// Print the session's recording (asciinema v2 cast) to stdout.
+    /// Print the session's recording (asciicast v2 or v3) to stdout.
     ///
     /// Redirect to a `.cast` file for playback in the asciicast ecosystem.
     GetRecording {
@@ -541,7 +545,7 @@ pub enum TraceOutcomeArg {
 
 #[derive(Subcommand)]
 pub enum RecordCmd {
-    /// Start recording terminal output to APNG, GIF, MP4, or asciicast v2.
+    /// Start recording terminal output to APNG, GIF, MP4, or asciicast v2/v3.
     Start {
         /// Output path. The extension selects APNG (.png/.apng), GIF, MP4, or cast.
         path: String,

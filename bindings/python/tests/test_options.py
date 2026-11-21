@@ -230,12 +230,16 @@ class RecordingResolutionTests(unittest.TestCase):
             cfg.normalize_recording(
                 AutomaticRecording(directory="casts")
             ),
-            {"directory": "casts", "mode": None},
+            {"directory": "casts", "mode": None, "format": None},
         )
         for mode in ("disabled", "on-failure", "always"):
             self.assertEqual(cfg.normalize_recording({"mode": mode}), {"mode": mode})
         with self.assertRaises(ValueError):
             cfg.normalize_recording({"mode": "sometimes"})
+        for format in ("cast", "cast3"):
+            self.assertEqual(cfg.normalize_recording({"format": format}), {"format": format})
+        with self.assertRaisesRegex(ValueError, "recording.format"):
+            cfg.normalize_recording({"format": "gif"})
         with self.assertRaises(TypeError):
             cfg.normalize_recording({"directory": ""})
         with self.assertRaises(ValueError):
