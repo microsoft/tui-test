@@ -143,6 +143,11 @@ test("website navigation, slugs, tabs, and links stay valid", () => {
     const url = new URL(href, "https://tui-test.dev");
     if (url.origin !== "https://tui-test.dev") return;
     if (url.pathname.startsWith("/docs-assets/")) {
+      if (url.pathname === "/docs-assets/trace-viewer/index.html") {
+        const viewerTemplate = path.join(root, "crates", "tui-test", "assets", "trace-viewer", "report.html");
+        assert(fs.existsSync(viewerTemplate), `${sourceLabel} requires ${viewerTemplate}`);
+        return;
+      }
       const assetPath = path.join(docsRoot, "assets", url.pathname.slice("/docs-assets/".length));
       assert(fs.existsSync(assetPath), `${sourceLabel} links to missing asset ${href}`);
       return;
