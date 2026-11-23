@@ -7,7 +7,7 @@ go get github.com/microsoft/tui-test/bindings/go@v0.1.1
 go run github.com/microsoft/tui-test/bindings/go/examples/smoke
 ```
 
-Published modules support Linux and macOS on `amd64` and `arm64`, plus Windows on `amd64`. Linux requires glibc 2.28+ or musl 1.2+ and a writable user cache on first run (or set `TUI_TEST_NATIVE_LIBRARY` to an explicit shared library path).
+Published modules support Linux, macOS, and Windows on `amd64` and `arm64`. Linux requires glibc 2.28+ or musl 1.2+ and a writable user cache on first run (or set `TUI_TEST_NATIVE_LIBRARY` to an explicit shared library path).
 
 ```go
 package main

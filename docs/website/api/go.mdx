@@ -18,7 +18,7 @@ go get github.com/microsoft/tui-test/bindings/go@v0.1.1
 | --- | --- | --- |
 | Linux | `amd64`, `arm64` | glibc 2.28+ or musl 1.2+ |
 | macOS | `amd64`, `arm64` | macOS system libraries |
-| Windows | `amd64` | Windows system libraries (includes bundled ConPTY) |
+| Windows | `amd64`, `arm64` | Windows system libraries (includes bundled ConPTY) |
 
 On first use, the module verifies and extracts the matching platform library into the user cache (`tui-test/native/<sha256>/`) and reuses it across subsequent runs without network requests.
 

@@ -37,6 +37,14 @@ test("wrong platform and truncated library headers are rejected", t => {
   fs.writeFileSync(filename, libraryFixture("aarch64-apple-darwin"));
   fixture.run("native", ["--library", filename, "--target", "aarch64-unknown-linux-gnu"], false);
   assert.equal(fs.existsSync(path.join(fixture.root, "target/native-packages")), false);
+  assert.throws(
+    () => packages.validateLibrary(libraryFixture("x86_64-pc-windows-msvc"), "aarch64-pc-windows-msvc"),
+    /format or architecture/,
+  );
+  assert.throws(
+    () => packages.validateLibrary(libraryFixture("aarch64-pc-windows-msvc"), "x86_64-pc-windows-msvc"),
+    /format or architecture/,
+  );
   for (const target of Object.keys(targets)) {
     assert.throws(() => packages.validateLibrary(Buffer.alloc(0), target), /format or architecture/);
   }
@@ -50,8 +58,8 @@ test("module assembly includes all targets without changing source", async t => 
   const contents = packages.directoryEntries(fixture.output);
   assert.deepEqual(await packages.verifyModule(fixture.root, fixture.output), contents);
   assert.deepEqual(contents.get("LICENSE"), fs.readFileSync(path.join(fixture.root, "LICENSE")));
-  assert.equal([...contents.keys()].filter(name => /bundled_.*\.go$/.test(name)).length, 5);
-  assert.equal([...contents.keys()].filter(name => name.endsWith(".tar.gz")).length, 7);
+  assert.equal([...contents.keys()].filter(name => /bundled_.*\.go$/.test(name)).length, 6);
+  assert.equal([...contents.keys()].filter(name => name.endsWith(".tar.gz")).length, 8);
   const filename = path.join(fixture.root, "tui-test-go-1.2.3.tar.gz");
   assert.ok(fs.existsSync(`${filename}.sha256`));
   const archived = await packages.readArchive(fs.readFileSync(filename));
@@ -66,7 +74,7 @@ test("generated embeds select and build for every Go platform", t => {
   fs.mkdirSync(scratch);
   for (const [platform, arch] of [
     ["linux", "amd64"], ["linux", "arm64"], ["darwin", "amd64"],
-    ["darwin", "arm64"], ["windows", "amd64"],
+    ["darwin", "arm64"], ["windows", "amd64"], ["windows", "arm64"],
   ]) {
     const env = {
       ...process.env, GOOS: platform, GOARCH: arch, CGO_ENABLED: "0", GOWORK: "off",
