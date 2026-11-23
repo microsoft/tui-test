@@ -1,0 +1,270 @@
+---
+title: Quickstart
+description: Open a shell or launch a terminal app, interact with visible text, and capture output.
+editUrl: false
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+After [installing `tui-test`](/docs/install/), you can either open an interactive shell with `open` or launch an executable directly with `run`. Use the language selector in the site header to switch all examples on the site to your preferred language.
+
+## Run a command in a shell
+
+`open` starts the platform's default shell and tracks prompt readiness, submitted commands, output, and exit codes.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    ```js
+    import { TuiTest } from "@microsoft/tui-test";
+
+    const terminal = TuiTest.ephemeral("quickstart");
+    try {
+      await terminal.open({ cols: 80, rows: 30 });
+      await terminal.submit("echo hello");
+      await terminal.waitCommand();
+      await terminal.expectOutput("hello");
+      await terminal.expectExitCode(0);
+      await terminal.screenshot("hello.svg");
+    } finally {
+      await terminal.closeQuiet();
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    import asyncio
+    from tui_test import TuiTest
+
+    async def main():
+        async with TuiTest.ephemeral("quickstart") as terminal:
+            await terminal.open(cols=80, rows=30)
+            await terminal.submit("echo hello")
+            await terminal.wait_command()
+            await terminal.expect_output("hello")
+            await terminal.expect_exit_code(0)
+            await terminal.screenshot("hello.svg")
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    use tui_test::{OpenOptions, Operation, Session};
+
+    fn main() -> Result<(), Box<dyn std::error::Error>> {
+        let terminal = Session::new("quickstart");
+        terminal.open(OpenOptions {
+            cols: 80,
+            rows: 30,
+            ..Default::default()
+        })?;
+        let result = (|| {
+            terminal.execute(Operation::Submit {
+                data: Some("echo hello".into()),
+            })?;
+            terminal.execute(Operation::WaitCommand { timeout_ms: None })?;
+            terminal.execute(Operation::ExpectOutput {
+                text: "hello".into(),
+                regex: false,
+            })?;
+            terminal.execute(Operation::ExpectExitCode {
+                code: 0,
+                timeout_ms: None,
+            })?;
+            terminal.execute(Operation::Screenshot {
+                full: false,
+                path: Some("hello.svg".into()),
+                zoom: None,
+                background: None,
+            })
+        })();
+        terminal.close()?;
+        result?;
+        Ok(())
+    }
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    ```go
+    package main
+
+    import (
+        "log"
+
+        "github.com/microsoft/tui-test/bindings/go"
+    )
+
+    func main() {
+        terminal, err := tuitest.Ephemeral("quickstart", tuitest.ClientOptions{})
+        if err != nil {
+            log.Fatal(err)
+        }
+        defer terminal.CloseQuiet()
+
+        opts := tuitest.OpenOptions{
+            SpawnOptions: tuitest.SpawnOptions{
+                Cols: tuitest.Ptr(uint16(80)),
+                Rows: tuitest.Ptr(uint16(30)),
+            },
+        }
+        if _, err := terminal.Open(opts); err != nil {
+            log.Print(err)
+            return
+        }
+        if err := terminal.Submit(tuitest.Ptr("echo hello")); err != nil {
+            log.Print(err)
+            return
+        }
+        if err := terminal.WaitCommand(tuitest.WaitOptions{}); err != nil {
+            log.Print(err)
+            return
+        }
+        if err := terminal.ExpectOutput("hello", tuitest.OutputOptions{}); err != nil {
+            log.Print(err)
+            return
+        }
+        if _, err := terminal.Screenshot("hello.svg", tuitest.ScreenshotOptions{}); err != nil {
+            log.Print(err)
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+    ```sh
+    tui-test --session quickstart open --cols 80 --rows 30
+    tui-test --session quickstart submit "echo hello"
+    tui-test --session quickstart wait command
+    tui-test --session quickstart expect output "hello"
+    tui-test --session quickstart expect exit-code 0
+    tui-test --session quickstart screenshot -o hello.svg
+    tui-test --session quickstart close
+    ```
+  </TabItem>
+</Tabs>
+
+CLI sessions stay alive in a background daemon across commands until you run `close`. Library sessions live inside your process and are independent of CLI daemons.
+
+## Drive a full-screen TUI app
+
+When testing an interactive CLI or full-screen terminal app, launch the executable directly with `run` instead of going through a shell. Use [locators](/docs/guides/locators/) to wait for visible labels and click controls without hard-coded cell coordinates.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    ```js
+    import { TuiTest } from "@microsoft/tui-test";
+
+    const terminal = TuiTest.ephemeral("app");
+    try {
+      await terminal.run("my-app", ["--config", "dev.toml"]);
+      await terminal.getByText("Ready").expect();
+      await terminal.getByText("Continue").click();
+      await terminal.getByText("Saved").expect();
+      await terminal.press("q");
+      await terminal.waitExit();
+      await terminal.expectExitCode(0);
+    } finally {
+      await terminal.closeQuiet();
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    from tui_test import TuiTest
+
+    async with TuiTest.ephemeral("app") as terminal:
+        await terminal.run("my-app", "--config", "dev.toml")
+        await terminal.get_by_text("Ready").expect()
+        await terminal.get_by_text("Continue").click()
+        await terminal.get_by_text("Saved").expect()
+        await terminal.press("q")
+        await terminal.wait_exit()
+        await terminal.expect_exit_code(0)
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    use tui_test::{Backend, KeyAction, Operation, RunOptions, Session};
+
+    let terminal = Session::new("app");
+    terminal.run(RunOptions {
+        program: "my-app".into(),
+        args: vec!["--config".into(), "dev.toml".into()],
+        backend: Backend::Alacritty,
+        profile: Default::default(),
+        cols: 80,
+        rows: 30,
+        cwd: None,
+        env: vec![],
+        wait_ready: None,
+        restart: false,
+        timeouts: Default::default(),
+        recording: Default::default(),
+        style: Default::default(),
+    })?;
+    terminal.get_by_text("Ready").expect()?;
+    terminal.get_by_text("Continue").click()?;
+    terminal.get_by_text("Saved").expect()?;
+    terminal.execute(Operation::Key {
+        action: KeyAction::Press,
+        keys: vec!["q".into()],
+    })?;
+    terminal.execute(Operation::WaitExit { timeout_ms: None })?;
+    terminal.execute(Operation::ExpectExitCode {
+        code: 0,
+        timeout_ms: None,
+    })?;
+    terminal.close()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    ```go
+    terminal, err := tuitest.Ephemeral("app", tuitest.ClientOptions{})
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer terminal.CloseQuiet()
+
+    if _, err := terminal.Run("my-app", []string{"--config", "dev.toml"}, tuitest.SpawnOptions{}); err != nil {
+        log.Print(err)
+        return
+    }
+    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        log.Print(err)
+        return
+    }
+    if err := terminal.GetByText("Continue", tuitest.TextSelectorOptions{}).Click(tuitest.LocatorClickOptions{}); err != nil {
+        log.Print(err)
+        return
+    }
+    if err := terminal.GetByText("Saved", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        log.Print(err)
+        return
+    }
+    if err := terminal.Press("q"); err != nil {
+        log.Print(err)
+        return
+    }
+    if err := terminal.WaitExit(tuitest.WaitOptions{}); err != nil {
+        log.Print(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+    ```sh
+    tui-test --session app run my-app --config dev.toml
+    tui-test --session app expect text "Ready"
+    tui-test --session app click text "Continue"
+    tui-test --session app expect text "Saved"
+    tui-test --session app key press q
+    tui-test --session app wait exit
+    tui-test --session app expect exit-code 0
+    tui-test --session app close
+    ```
+  </TabItem>
+</Tabs>
+
+## Next steps
+
+- Set up automated test suites in [writing and running tests](/docs/getting-started/testing/).
+- Match styled text, OSC 8 links, and relative regions with [locators](/docs/guides/locators/).
+- Record GIFs, MP4s, or failure traces in [recordings](/docs/capture/recordings/) and [traces and diagnostics](/docs/capture/traces/).

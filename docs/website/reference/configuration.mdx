@@ -1,0 +1,129 @@
+---
+title: Configuration
+description: Configure tui-test.toml profiles, timeouts, terminal palettes, capture styles, traces, and environment variables.
+editUrl: false
+---
+
+## File discovery and precedence
+
+The CLI resolves its configuration file in the following order:
+
+1. `--config PATH` on `open`, `run`, or `get-recording` (must exist).
+2. `TUI_TEST_CONFIG` environment variable (must exist).
+3. `./tui-test.toml` in the caller's working directory.
+4. `<platform-config-dir>/tui-test/tui-test.toml` (skipped when `TUI_TEST_HOME` is set).
+5. `$TUI_TEST_HOME/tui-test.toml` or `~/.tui-test/tui-test.toml`.
+
+When no file is found, built-in defaults apply. Unknown TOML keys fail validation immediately so typos do not silently fall back. Configuration is resolved by the CLI client at session launch; changing `tui-test.toml` later does not alter an already running session until `--restart` is used.
+
+Relative paths inside `tui-test.toml` (such as `recording.directory`, `trace.directory`, and custom font files) resolve relative to the directory containing `tui-test.toml`, not the background daemon's working directory.
+
+## Complete example
+
+```toml
+[recording]
+directory = "./artifacts/casts"
+
+[recording.style]
+font_size = 17
+canvas_background = "#101014"
+canvas_padding = 24
+
+[trace]
+mode = "on-failure"
+directory = "./artifacts/traces"
+
+[diagnostics]
+screen-history-limit = 10
+
+[profiles.default]
+scrollback = 10000
+
+[profiles.default.colors]
+background = "#000000"
+foreground = "#c0c0c0"
+red = "#800000"
+
+[profiles.ci]
+scrollback = 1000
+
+[profiles.ci.timeouts]
+text = 10000
+command = 60000
+
+[profiles.ci.recording.style]
+font_size = 20
+```
+
+## Profiles and inheritance
+
+Select a profile at launch with `--profile NAME` (defaults to `default`). Named profiles must exist in the file, whereas `default` falls back to built-in values if omitted.
+
+Each `[profiles.<name>]` table accepts `scrollback` (default `10000` rows), `colors`, `timeouts`, and `recording`. Profile `recording` settings inherit omitted keys from the top-level `[recording]` table field by field, including nested `[recording.style.*]` tables. Shell, backend, dimensions (`--cols`, `--rows`), `cwd`, and `env` are launch flags rather than TOML profile keys.
+
+## Timeouts
+
+Timeout values use milliseconds. Per-operation `--timeout` flags override launch `--timeout-<class>` flags, which override `[profiles.<name>.timeouts]`, which override `TUI_TEST_TIMEOUT_<CLASS>_MS` environment variables:
+
+| Class | Built-in default | Launch flag | Environment variable |
+| --- | --- | --- | --- |
+| `text` | `5000` | `--timeout-text MS` | `TUI_TEST_TIMEOUT_TEXT_MS` |
+| `idle` | `5000` | `--timeout-idle MS` | `TUI_TEST_TIMEOUT_IDLE_MS` |
+| `command` | `30000` | `--timeout-command MS` | `TUI_TEST_TIMEOUT_COMMAND_MS` |
+| `exit` | `30000` | `--timeout-exit MS` | `TUI_TEST_TIMEOUT_EXIT_MS` |
+| `ready` | `30000` | `--timeout-ready MS` | `TUI_TEST_TIMEOUT_READY_MS` |
+
+## Terminal palette
+
+`[profiles.<name>.colors]` configures the terminal emulator's default `foreground`, `background`, `cursor`, and named ANSI colors (`black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, plus `bright_*` variants); see [`crates/tui-test/src/profile.rs`](https://github.com/microsoft/tui-test/blob/main/crates/tui-test/src/profile.rs) for every key. Runtime OSC color changes made by an application are reported separately by `get colors` and `state.colors`.
+
+## Recording style
+
+`[recording.style]` (and `RenderStyle` / `Style` in the language APIs) controls how screenshots, raster recordings, failure SVGs, and trace SVGs are drawn, without altering terminal cell colors or locator assertions.
+
+### Typography
+
+`font_size` defaults to `17` and `title_font_size` defaults to `13`. `[recording.style.font]` accepts `family`, `bold`, `italic`, `bold_italic`, and `files = ["path/to/font.ttf"]` (up to 64 MiB total custom font data). The default stack is `'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,'DejaVu Sans Mono',monospace`. SVG output references font family names on the viewer's machine, while PNG, GIF, APNG, and MP4 rasterize glyphs directly.
+
+### Canvas and padding
+
+`canvas_background` sets the outer backdrop. `canvas_padding` (default `24` on all sides) and `content_padding` (default `{ top = 8, right = 15, bottom = 14, left = 15 }`) each accept either a single uniform number or a `{ top, right, bottom, left }` table.
+
+### Window, border, and shadow
+
+```toml
+[recording.style.window]
+title_bar = true
+traffic_lights = true
+background = "#d9d9e8"
+foreground = "#414145"
+divider = "#000000"
+
+[recording.style.border]
+width = 0
+color = "#000000"
+radius = 8
+
+[recording.style.shadow]
+enabled = true
+color = "#080812"
+offset = 5
+spread = 7
+```
+
+### Cursor blink
+
+`[recording.style.cursor]` sets `blink = true` and `blink_interval_ms = 500` (each visible or hidden phase before `speed` scaling). Blinking animates in raster recordings only when both `blink = true` and the running application requests a blinking cursor style; screenshots always render the visible phase.
+
+## Traces, diagnostics, and environment variables
+
+- `[recording] directory` sets where automatic `.cast` files are staged. TOML configuration does not accept `recording.mode`; CLI retention follows `[trace] mode` (`"off"`, `"on-failure"`, `"on"`, default directory `.tui-test/traces`). Language APIs additionally accept `recording.mode` (`"disabled"`, `"on-failure"`, `"always"`).
+- `[diagnostics] screen-history-limit` (default `10`, max `50`, overridden by `--screen-history-limit`) controls how many recent distinct screens are kept for failure timelines.
+
+| Environment variable | Purpose |
+| --- | --- |
+| `TUI_TEST_SESSION` | Default session name when `--session` or constructor `session` is omitted. |
+| `TUI_TEST_CONFIG` | Explicit `tui-test.toml` path when `--config` is omitted. |
+| `TUI_TEST_HOME` | Runtime state directory and fallback config directory. |
+| `TUI_TEST_NATIVE_LIBRARY` | Explicit shared library path (`libtui_test_ffi.*` / `tui_test_ffi.dll`) for Go, Python, and JavaScript. |
+| `TUI_TEST_TIMEOUT_<CLASS>_MS` | Positive integer millisecond fallback for `TEXT`, `IDLE`, `COMMAND`, `EXIT`, or `READY`. |

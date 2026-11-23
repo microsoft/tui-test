@@ -1,0 +1,93 @@
+---
+title: Rust
+description: Crate guide, Cargo feature flags, Session, Operation, Locator, and tape APIs for tui-test-rs.
+editUrl: false
+---
+
+`tui-test-rs` is the core Rust engine that powers the CLI and all language bindings. Adding it to `Cargo.toml` exposes the `tui_test` library crate directly in your process.
+
+## Install and Cargo features
+
+```sh
+cargo add tui-test-rs@0.1.1
+```
+
+Requires Rust 1.90 or newer. Alacritty is enabled by default without extra feature flags; opt into additional backends or raster capture features as needed:
+
+| Feature | Enables |
+| --- | --- |
+| `ghostty` | Native Ghostty backend (requires Zig 0.16 at build time). |
+| `rio` | Rio terminal backend. |
+| `xtermjs` | Embedded headless xterm.js backend with Unicode 11 width tables. |
+| `recording-raster` | PNG screenshots and APNG, GIF, and MP4 recordings (uses system fonts unless bundled fonts are enabled; MP4 also needs `ffmpeg` on `PATH`). |
+| `recording-font-jetbrains-mono` | `recording-raster` plus the regular JetBrains Mono font. |
+| `recording-font-jetbrains-mono-styles` | Bold, italic, and bold-italic JetBrains Mono styles. |
+| `recording-font-jetbrains-mono-full` | Complete bundled JetBrains Mono font family. |
+
+## Quick start
+
+```rust
+use tui_test::{OpenOptions, Operation, Session};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let terminal = Session::new("example");
+    terminal.open(OpenOptions::default())?;
+    let result = (|| {
+        terminal.execute(Operation::Submit {
+            data: Some("echo hello".into()),
+        })?;
+        terminal.execute(Operation::WaitCommand { timeout_ms: None })?;
+        terminal.get_by_text("hello").last().expect()
+    })();
+    terminal.close()?;
+    result?;
+    Ok(())
+}
+```
+
+Keep `terminal.close()` outside fallible closures or inside a drop guard so a failed assertion still terminates the child process.
+
+## `Session` and `SessionRegistry`
+
+`Session::new(name)` creates an isolated, unshared terminal owner. Use `SessionRegistry` (or `global_registry()`) only when multiple call sites need to look up and share sessions by string name.
+
+Key methods on [`Session`](https://docs.rs/tui-test-rs/latest/tui_test/struct.Session.html):
+
+| Method | Description |
+| --- | --- |
+| `open(OpenOptions)` / `run(RunOptions)` | Spawn a shell or direct executable, returning `OpenResult` (including any automatic `recording` path). |
+| `with_execution_context(ExecutionContext)` | Return a clone carrying default `trace`, `artifact`, `diagnostic_context`, `operation_name`, and `retention` settings. |
+| `execute(Operation)` / `execute_with_context(Operation, &ExecutionContext)` | Run a terminal action, query, wait, assertion, or capture, returning `Result<OperationResult, TuiTestError>`. |
+| `get_by_text` / `get_by_style` / `get_by_link` | Create a lazy [`Locator`](https://docs.rs/tui-test-rs/latest/tui_test/struct.Locator.html). |
+| `interrupt()` | Cancel pending waits immediately and terminate the child without closing the session. |
+| `close()` / `is_open()` | Release the session or check whether a child terminal is open. |
+| `recording_path()` / `recording()` | Read the automatic asciinema cast path or contents. |
+
+## `Operation` and `OperationResult`
+
+[`Operation`](https://docs.rs/tui-test-rs/latest/tui_test/enum.Operation.html) covers every session capability:
+
+| Area | `Operation` variants |
+| --- | --- |
+| Lifecycle and trace | `Restart`, `FinishTrace { outcome: TraceOutcome }` |
+| Input and process | `Write`, `Submit`, `Key { action, keys }`, `Mouse { action }`, `Resize`, `Scroll { target: ScrollTarget }`, `Signal` |
+| Inspection | `State`, `Text { full }`, `PackedScreen { full }`, `Cells { x, y, w, h }`, `GetCommand`, `GetOutput`, `GetExitCode`, `GetCwd`, `GetCursor`, `GetModes`, `GetColors`, `GetSize`, `GetViewport`, `GetTitle`, `GetClipboard`, `GetBellCount`, `GetBellEvents` |
+| Waits and assertions | `WaitReady`, `WaitCommand`, `WaitExit`, `WaitIdle`, `WaitTitle`, `WaitClipboard`, `WaitClipboardMatch`, `WaitBell`, `ExpectTitle`, `ExpectOutput`, `ExpectExitCode`, `ExpectBellCount`, `ExpectCursor`, `ExpectMode`, `ExpectColors`, `Snapshot` |
+| Locators and captures | `FindLocator`, `ResolveLocator`, `WaitLocator`, `ClickLocator`, `HighlightLocator`, `Screenshot`, `StartRecording`, `PauseRecording`, `ResumeRecording`, `StopRecording` |
+
+## `Locator` and `LocatorQuery`
+
+`Locator` evaluates against a fresh terminal snapshot on every call:
+
+- Narrow text selectors with `TextSelector { text, regex, full, whitespace, scope: TextScope { after, before } }`.
+- Refine relative to a parent locator with `get_by_text_relative`, `get_by_style_relative`, and `get_by_link_relative` (`LocatorDirection::Within`, `After`, `Before`).
+- Compose with `and(&other)`, `or(&other)`, and `filter(LocatorFilterOptions { has, has_not })`.
+- Select occurrences with `any()`, `unique()`, `first()`, `last()`, or `nth(index)`.
+- Read or act with `locations()`, `location()`, `count()`, `all()`, `wait()`, `wait_with_timeout()`, `wait_hidden()`, `expect()`, `expect_with()`, `click()`, `click_with()`, `highlight()`, and `highlight_with_timeout()`.
+
+## Styling, diagnostics, and tapes
+
+- Customize screenshots and raster recordings via `OpenOptions::style` / `RunOptions::style` (`tui_test::render::style::Style`), including fonts, padding, window chrome, borders, shadows, and `cursor.blink` / `cursor.blink_interval_ms`.
+- Inspect structured errors through `TuiTestError` (`FailureDetails`, `FailureArtifactRef`) instead of parsing formatted error strings.
+- Parse, validate, and run `.tape` files with [`tui_test::tape`](https://docs.rs/tui-test-rs/latest/tui_test/tape/) (`parse`, `load`, `compile`, `check`, `run`); see [tape files](/docs/capture/tapes/).
+- Browse complete type signatures on [docs.rs/tui-test-rs](https://docs.rs/tui-test-rs/latest/tui_test/).
