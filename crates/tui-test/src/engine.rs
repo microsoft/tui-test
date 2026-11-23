@@ -2155,12 +2155,10 @@ fn dispatch(
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .emu
-                    .program_statuses()
+                    .program_status(&id)
                     .ok_or_else(|| {
                         TuiTestError::usage("program status is unsupported by this backend")
-                    })?
-                    .into_iter()
-                    .find(|record| record.id == id),
+                    })?,
             ))
         }
         Operation::WaitProgramStatus {
@@ -4347,34 +4345,40 @@ fn expect_program_status(
 ) -> Result<(), TuiTestError> {
     expected.validate()?;
     let current = || {
-        session
+        let state = session
             .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .emu
-            .program_statuses()
-            .map(|records| records.into_iter().find(|record| record.id == expected.id))
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.emu.program_status(&expected.id).map(|record| {
+            (
+                record,
+                state.exited.is_some()
+                    || session.cancelled.load(std::sync::atomic::Ordering::Acquire),
+            )
+        })
     };
-    let mut actual = current()
+    let (mut actual, mut stopped) = current()
         .ok_or_else(|| TuiTestError::usage("program status is unsupported by this backend"))?;
-    poll_until(
-        session,
-        || {
-            actual = current().expect("backend support cannot change during a wait");
-            actual
-                .as_ref()
-                .is_some_and(|actual| expected.matches(actual))
-                || session_stopped(session)
-        },
-        timeout_ms,
-    )?;
-    if actual
-        .as_ref()
-        .is_some_and(|actual| expected.matches(actual))
-    {
+    session.check_cancelled()?;
+    let matches = |record: &Option<crate::api::ProgramStatus>| {
+        record
+            .as_ref()
+            .is_some_and(|record| expected.matches(record))
+    };
+    if !matches(&actual) && !stopped {
+        poll_until(
+            session,
+            || {
+                (actual, stopped) = current().expect("backend support cannot change during a wait");
+                matches(&actual) || stopped
+            },
+            timeout_ms,
+        )?;
+    }
+    if matches(&actual) {
         Ok(())
     } else {
-        let reason = if session_stopped(session) {
+        let reason = if stopped {
             FailureReason::SessionExited
         } else {
             FailureReason::TimedOut
@@ -4725,6 +4729,72 @@ mod tests {
                 directory: None,
             },
         }
+    }
+
+    #[test]
+    #[cfg(feature = "rio")]
+    fn program_status_wait_matches_the_first_sample_and_final_exit_state() {
+        let engine = Engine::new(
+            "status-samples".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        let mut options = sleeping_program(false);
+        options.backend = crate::Backend::Rio;
+        engine.execute(Operation::Run(options)).unwrap();
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            session
+                .state
+                .lock()
+                .unwrap()
+                .emu
+                .process(b"\x1b]7501;state=working\x07");
+            let change_after_sample = || {
+                session
+                    .state
+                    .lock()
+                    .unwrap()
+                    .emu
+                    .process(b"\x1b]7501;state=done\x07");
+                false
+            };
+            let waiting = WaitContext {
+                session,
+                request_cancelled: &change_after_sample,
+            };
+            expect_program_status(
+                &waiting,
+                crate::api::ProgramStatusMatch {
+                    state: Some(crate::api::ProgramState::Working),
+                    ..Default::default()
+                },
+                0,
+                "wait.program_status",
+            )
+            .unwrap();
+            {
+                let mut state = session.state.lock().unwrap();
+                state.emu.finish_process();
+                state.exited = Some(0);
+            }
+            let waiting = WaitContext {
+                session,
+                request_cancelled: &|| false,
+            };
+            expect_program_status(
+                &waiting,
+                crate::api::ProgramStatusMatch {
+                    state: Some(crate::api::ProgramState::Done),
+                    ..Default::default()
+                },
+                0,
+                "wait.program_status",
+            )
+            .unwrap();
+        }
+        engine.execute(Operation::Close).unwrap();
     }
 
     #[test]

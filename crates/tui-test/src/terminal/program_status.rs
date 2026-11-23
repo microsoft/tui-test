@@ -77,20 +77,33 @@ impl ProgramStatuses {
     }
 
     pub fn all(&self) -> Vec<ProgramStatus> {
-        let mut records = self.records.clone();
-        for record in &mut records {
-            let mut parent = record.id.as_str();
-            while record.app.is_none() && !parent.is_empty() {
-                parent = parent.rsplit_once('/').map_or("", |(parent, _)| parent);
-                record.app = self
-                    .records
-                    .iter()
-                    .find(|record| record.id == parent)
-                    .and_then(|record| record.app.clone());
-            }
-        }
+        let mut records: Vec<_> = self
+            .records
+            .iter()
+            .map(|record| self.with_inherited_app(record.clone()))
+            .collect();
         records.sort_by(|left, right| left.id.cmp(&right.id));
         records
+    }
+
+    pub fn get(&self, id: &str) -> Option<ProgramStatus> {
+        self.records
+            .iter()
+            .find(|record| record.id == id)
+            .map(|record| self.with_inherited_app(record.clone()))
+    }
+
+    fn with_inherited_app(&self, mut record: ProgramStatus) -> ProgramStatus {
+        let mut parent = record.id.as_str();
+        while record.app.is_none() && !parent.is_empty() {
+            parent = parent.rsplit_once('/').map_or("", |(parent, _)| parent);
+            record.app = self
+                .records
+                .iter()
+                .find(|record| record.id == parent)
+                .and_then(|record| record.app.clone());
+        }
+        record
     }
 }
 
@@ -128,9 +141,22 @@ mod tests {
             assert_eq!(records[2].message.as_deref(), Some("Approve?"));
             assert_eq!(records[2].kind, Some(ProgramStatusKind::Permission));
             assert_eq!(records[2].progress, Some(40));
+            assert_eq!(
+                emu.program_status("build/test"),
+                Some(Some(records[2].clone()))
+            );
+            assert_eq!(emu.program_status("missing"), Some(None));
             emu.process(b"\x1b]7501;state=done:id=build\x07");
             assert_eq!(
                 emu.program_statuses().unwrap()[2].app.as_deref(),
+                Some("deploy")
+            );
+            assert_eq!(
+                emu.program_status("build/test")
+                    .unwrap()
+                    .unwrap()
+                    .app
+                    .as_deref(),
                 Some("deploy")
             );
             emu.process(b"\x1b]7501;state=done:id=build/test\x07");

@@ -443,6 +443,11 @@ pub trait Emulator: Send {
         None
     }
 
+    /// Outer `None` means unsupported; inner `None` means the ID is absent.
+    fn program_status(&self, _id: &str) -> Option<Option<crate::api::ProgramStatus>> {
+        None
+    }
+
     /// Remove unfinished native records when the child exits.
     fn finish_process(&mut self) {}
 

@@ -380,6 +380,15 @@ impl RioEmu {
 }
 
 impl Emulator for RioEmu {
+    fn program_status(&self, id: &str) -> Option<Option<ProgramStatus>> {
+        Some(
+            self.program_statuses
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(id),
+        )
+    }
+
     fn program_statuses(&self) -> Option<Vec<ProgramStatus>> {
         Some(
             self.program_statuses

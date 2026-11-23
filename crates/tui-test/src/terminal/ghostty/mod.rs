@@ -282,6 +282,13 @@ impl Emulator for GhosttyEmu {
         Some(self.call("reading program status", |core| core.program_statuses()))
     }
 
+    fn program_status(&self, id: &str) -> Option<Option<crate::api::ProgramStatus>> {
+        let id = id.to_owned();
+        Some(self.call("reading program status", move |core| {
+            core.program_status(&id)
+        }))
+    }
+
     fn finish_process(&mut self) {
         self.call("finishing program status", GhosttyCore::finish_process);
     }

@@ -366,11 +366,11 @@ export class NativeRuntime {
   }
 
   waitProgramStatus(expected: import("./types.js").ProgramStatusMatch, timeoutMs?: number): Promise<void> {
-    return this.#call((session) => session.waitProgramStatus({ ...expected, id: expected.id ?? "" } as ProgramStatusMatch, timeoutMs));
+    return this.#call((session) => session.waitProgramStatus(expected as ProgramStatusMatch, timeoutMs));
   }
 
   expectProgramStatus(expected: import("./types.js").ProgramStatusMatch, timeoutMs?: number): Promise<void> {
-    return this.#call((session) => session.expectProgramStatus({ ...expected, id: expected.id ?? "" } as ProgramStatusMatch, timeoutMs));
+    return this.#call((session) => session.expectProgramStatus(expected as ProgramStatusMatch, timeoutMs));
   }
 
   waitProgressBar(expected: import("./types.js").ProgressBarMatch, timeoutMs?: number): Promise<void> {

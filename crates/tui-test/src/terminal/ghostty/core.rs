@@ -333,6 +333,10 @@ impl GhosttyCore {
         self.program_statuses.borrow().all()
     }
 
+    pub(super) fn program_status(&self, id: &str) -> Option<crate::api::ProgramStatus> {
+        self.program_statuses.borrow().get(id)
+    }
+
     pub(super) fn finish_process(&mut self) {
         self.program_statuses.borrow_mut().finish_process();
     }

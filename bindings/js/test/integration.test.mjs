@@ -41,6 +41,13 @@ test("OSC program status supports IDs, decoded text, partial matches, and invali
     assert.equal(await terminal.getProgramStatus("missing"), null);
     assert.deepEqual((await terminal.state()).program_statuses, values);
     await terminal.waitProgramStatus();
+    const getterMatch = Object.create({
+      get state() { return "done"; },
+    });
+    getterMatch.id = "build";
+    for (const method of ["waitProgramStatus", "expectProgramStatus"]) {
+      await assert.rejects(terminal[method](getterMatch, { timeout: 0 }), ExpectationError);
+    }
     await assert.rejects(terminal.expectProgramStatus({ id: "missing" }, { timeout: 0 }), (error) => {
       assert.ok(error instanceof ExpectationError);
       assert.equal(error.details.operation, "expect.program_status");

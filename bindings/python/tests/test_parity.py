@@ -11,6 +11,19 @@ from tui_test import _native
 
 
 class ParityTests(unittest.TestCase):
+    def test_program_status_preserves_positional_arguments(self):
+        from tui_test import ProgressBar, State, Timeouts
+
+        modes, colors = {"wraparound": True}, {"foreground": "#ffffff"}
+        progress = ProgressBar(state="normal", progress=42)
+        state = State(80, 24, {"x": 0, "y": 0}, None, None, None, None,
+                      None, None, False, Timeouts(), "", None, 2, progress,
+                      modes, "none", colors)
+        self.assertIs(state.progress_bar, progress)
+        self.assertIs(state.modes, modes)
+        self.assertIs(state.colors, colors)
+        self.assertIsNone(state.program_statuses)
+
     def test_scoped_text_and_whole_match_style_are_immutable(self):
         terminal = TuiTest("parity")
         scope = TextScope(after=TextAnchor("Start", regex=True, occurrence=1),
