@@ -4300,27 +4300,35 @@ fn expect_progress_bar(
 ) -> Result<(), TuiTestError> {
     expected.validate()?;
     let current = || {
-        session
+        let state = session
             .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .emu
-            .progress_bar()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.emu.progress_bar().map(|progress| {
+            (
+                progress,
+                state.exited.is_some()
+                    || session.cancelled.load(std::sync::atomic::Ordering::Acquire),
+            )
+        })
     };
-    let mut actual = current()
+    let (mut actual, mut stopped) = current()
         .ok_or_else(|| TuiTestError::usage("progress reports are unsupported by this backend"))?;
-    poll_until(
-        session,
-        || {
-            actual = current().expect("backend progress support does not change");
-            expected.matches(&actual) || session_stopped(session)
-        },
-        timeout_ms,
-    )?;
+    session.check_cancelled()?;
+    if !expected.matches(&actual) && !stopped {
+        poll_until(
+            session,
+            || {
+                (actual, stopped) = current().expect("backend progress support does not change");
+                expected.matches(&actual) || stopped
+            },
+            timeout_ms,
+        )?;
+    }
     if expected.matches(&actual) {
         Ok(())
     } else {
-        let reason = if session_stopped(session) {
+        let reason = if stopped {
             FailureReason::SessionExited
         } else {
             FailureReason::TimedOut
@@ -4625,6 +4633,72 @@ mod tests {
                 directory: None,
             },
         }
+    }
+
+    #[test]
+    #[cfg(feature = "rio")]
+    fn progress_wait_matches_the_first_sample_and_final_exit_state() {
+        let engine = Engine::new(
+            "progress-samples".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        let mut options = sleeping_program(false);
+        options.backend = crate::Backend::Rio;
+        engine.execute(Operation::Run(options)).unwrap();
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            session
+                .state
+                .lock()
+                .unwrap()
+                .emu
+                .process(b"\x1b]9;4;1;50\x07");
+            let change_after_sample = || {
+                session
+                    .state
+                    .lock()
+                    .unwrap()
+                    .emu
+                    .process(b"\x1b]9;4;1;80\x07");
+                false
+            };
+            let waiting = WaitContext {
+                session,
+                request_cancelled: &change_after_sample,
+            };
+            expect_progress_bar(
+                &waiting,
+                crate::api::ProgressBarMatch {
+                    progress: Some(50),
+                    ..Default::default()
+                },
+                0,
+                "wait.progress_bar",
+            )
+            .unwrap();
+            {
+                let mut state = session.state.lock().unwrap();
+                state.emu.process(b"\x1b]9;4;1;100\x07");
+                state.exited = Some(0);
+            }
+            let waiting = WaitContext {
+                session,
+                request_cancelled: &|| false,
+            };
+            expect_progress_bar(
+                &waiting,
+                crate::api::ProgressBarMatch {
+                    progress: Some(100),
+                    ..Default::default()
+                },
+                0,
+                "wait.progress_bar",
+            )
+            .unwrap();
+        }
+        engine.execute(Operation::Close).unwrap();
     }
 
     #[test]
