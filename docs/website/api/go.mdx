@@ -4,11 +4,11 @@ description: Install the Go module, configure embedded or external native engine
 editUrl: false
 ---
 
-`github.com/microsoft/tui-test/bindings/go` (`package tuitest`) runs the `tui-test` Rust engine in-process via PureGo without cgo, Rust, Zig, or the CLI binary.
+`github.com/microsoft/tui-test/bindings/go` (`package tuitest`) runs the `tui-test` terminal engine in-process.
 
 ## Install
 
-Use Go 1.26 or newer and pin a published module release so Go fetches the tagged tree containing prebuilt native libraries:
+Requires Go 1.26 or newer:
 
 ```sh
 go get github.com/microsoft/tui-test/bindings/go@v0.1.1

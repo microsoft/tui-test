@@ -60,11 +60,11 @@ See [AI agents](/docs/getting-started/ai-agents/) for agent workflows, prompt op
 
 ## Libraries
 
-Each library runs the terminal engine in-process without needing the `tui-test` CLI binary.
+Each library runs the terminal engine in-process.
 
 <Tabs syncKey="example-language">
   <TabItem label="JavaScript">
-    Requires Node.js 20 or newer. Keep optional dependencies enabled during installation so npm installs the prebuilt native package for your platform.
+    Requires Node.js 20 or newer. Keep optional dependencies enabled during installation.
 
     ```sh
     npm install @microsoft/tui-test
@@ -73,7 +73,7 @@ Each library runs the terminal engine in-process without needing the `tui-test` 
     The package is ESM only. Bun and Deno work on a best-effort basis; Deno 2 requires a local `node_modules` directory and `--allow-ffi`. See the [JavaScript and TypeScript API](/docs/api/javascript/).
   </TabItem>
   <TabItem label="Python">
-    Requires Python 3.8 or newer. Published wheels include the prebuilt native engine.
+    Requires Python 3.8 or newer.
 
     ```sh
     pip install tui-test
@@ -91,16 +91,20 @@ Each library runs the terminal engine in-process without needing the `tui-test` 
     Alacritty is enabled by default. Enable `ghostty`, `rio`, or `xtermjs` for additional terminal backends, and `recording-raster` (or `recording-font-jetbrains-mono*` for bundled fonts) for APNG, GIF, and MP4 output. See the [Rust API](/docs/api/rust/) and [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/).
   </TabItem>
   <TabItem label="Go">
-    Requires Go 1.26 or newer. Published module releases bundle the prebuilt native engine and do not require cgo, Rust, Zig, or the CLI:
+    Requires Go 1.26 or newer.
 
     ```sh
     go get github.com/microsoft/tui-test/bindings/go@v0.1.1
     ```
 
-    See the [Go API](/docs/api/go/) for supported platforms, Linux libc baselines, and read-only cache overrides.
+    See the [Go API](/docs/api/go/).
   </TabItem>
 </Tabs>
 
 ### Custom native library path
 
-Published wheels, npm platform packages, and Go modules include the native engine and run offline once installed. When running against a local source checkout, testing a custom engine binary, or running Go where the user cache directory cannot be written, set `TUI_TEST_NATIVE_LIBRARY` to the absolute path of `libtui_test_ffi.so`, `libtui_test_ffi.dylib`, or `tui_test_ffi.dll`. The shared library must match your language package's release version and target platform. See [`crates/tui-test-ffi/README.md`](https://github.com/microsoft/tui-test/blob/main/crates/tui-test-ffi/README.md#build-and-use) for local source builds.
+When running against a local source checkout, testing a custom engine binary, or running Go where the user cache directory (`os.UserCacheDir()`) cannot be written, set `TUI_TEST_NATIVE_LIBRARY` to the absolute path of `libtui_test_ffi.so`, `libtui_test_ffi.dylib`, or `tui_test_ffi.dll`. The shared library must match your language package's release version and target platform. See [`crates/tui-test-ffi/README.md`](https://github.com/microsoft/tui-test/blob/main/crates/tui-test-ffi/README.md#build-and-use) for local source builds.
+
+### Requirements
+
+Prebuilt libraries for JavaScript, Python, and Go support macOS (`x86_64` and `arm64`), Linux (`x86_64` and `arm64`), and Windows (`x86_64`). On Linux, prebuilt packages require glibc 2.28+ or musl 1.2+. `tui-test-rs` compiles from source with Cargo against your target's standard library.

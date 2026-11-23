@@ -1,6 +1,6 @@
 # tui-test for Go
 
-Control, inspect, test, and record terminal apps from Go 1.26 or newer. Published modules bundle the prebuilt native engine and do not require Rust, Zig, cgo, or the `tui-test` CLI.
+Control, inspect, test, and record terminal apps from Go 1.26 or newer.
 
 ```sh
 go get github.com/microsoft/tui-test/bindings/go@v0.1.1
