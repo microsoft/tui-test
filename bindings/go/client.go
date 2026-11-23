@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -147,7 +148,7 @@ func cloneRenderStyle(style *RenderStyle) *RenderStyle {
 			Bold:       clonePointer(style.Font.Bold),
 			Italic:     clonePointer(style.Font.Italic),
 			BoldItalic: clonePointer(style.Font.BoldItalic),
-			Files:      append([]string(nil), style.Font.Files...),
+			Files:      slices.Clone(style.Font.Files),
 		},
 		FontSize:         clonePointer(style.FontSize),
 		TitleFontSize:    clonePointer(style.TitleFontSize),

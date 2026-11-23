@@ -21,13 +21,6 @@ struct AutomaticRecordingWire {
     directory: Option<std::path::PathBuf>,
 }
 
-fn serialize_recording<S>(recording: &AutomaticRecording, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    AutomaticRecordingWire::serialize(recording, serializer)
-}
-
 fn deserialize_recording<'de, D>(deserializer: D) -> Result<Box<AutomaticRecording>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -82,7 +75,7 @@ pub enum Request {
         timeouts: Timeouts,
         #[serde(
             default,
-            serialize_with = "serialize_recording",
+            serialize_with = "AutomaticRecordingWire::serialize",
             deserialize_with = "deserialize_recording"
         )]
         recording: Box<AutomaticRecording>,
@@ -338,6 +331,8 @@ impl Request {
     }
 
     fn spawn_trace(&self) -> Option<tui_test::TraceOptions> {
+        // An explicit trace mode, even Off, overrides recording in the engine.
+        // Leave the context unset for a cast-only spawn.
         match self {
             Self::Open {
                 trace, recording, ..

@@ -404,15 +404,11 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             wait_ready,
             no_wait_ready,
             restart,
-            recording_mode,
             profile,
             timeouts,
             diagnostics,
         }) => {
-            let mut settings = resolve_client_settings(&profile)?;
-            if let Some(mode) = recording_mode {
-                settings.recording.mode = mode.into();
-            }
+            let settings = resolve_client_settings(&profile)?;
             Request::Open {
                 shell: shell.map(Into::into),
                 program: None,
@@ -446,17 +442,13 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             wait_ready,
             no_wait_ready,
             restart,
-            recording_mode,
             profile,
             timeouts,
             diagnostics,
         }) => {
             let mut prog = vec![program];
             prog.extend(args);
-            let mut settings = resolve_client_settings(&profile)?;
-            if let Some(mode) = recording_mode {
-                settings.recording.mode = mode.into();
-            }
+            let settings = resolve_client_settings(&profile)?;
             Request::Open {
                 shell: None,
                 program: Some(prog),
@@ -1647,7 +1639,7 @@ fn usage_text() -> &'static str {
 \n\
 SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
                   [--config F] [--profile P] [--restart] [--recording-mode MODE]\n\
-          run [--config F] [--profile P] [--restart] <program> [args...]\n\
+          run [--config F] [--profile P] [--restart] [--recording-mode MODE] <program> [args...]\n\
           [global options] -- <program> [args...]  (direct run shorthand)\n\
           restart [--graceful-timeout MS]\n\
           interrupt (cancel operations and terminate the child; retain session state)\n\

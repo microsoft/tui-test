@@ -1,0 +1,120 @@
+---
+title: Go
+description: Install the Go module, configure embedded or external native engines, and use tuitest and tuitesttest.
+editUrl: false
+---
+
+`github.com/microsoft/tui-test/bindings/go` (`package tuitest`) runs the `tui-test` terminal engine in-process.
+
+## Install
+
+Requires Go 1.26 or newer:
+
+```sh
+go get github.com/microsoft/tui-test/bindings/go@v0.1.1
+```
+
+| OS | `GOARCH` | Runtime requirements |
+| --- | --- | --- |
+| Linux | `amd64`, `arm64` | glibc 2.28+ or musl 1.2+ |
+| macOS | `amd64`, `arm64` | macOS system libraries |
+| Windows | `amd64`, `arm64` | Windows system libraries (includes bundled ConPTY) |
+
+On first use, the module verifies and extracts the matching platform library into the user cache (`tui-test/native/<sha256>/`) and reuses it across subsequent runs without network requests.
+
+### Cross-compilation and custom native libraries
+
+Linux builds select the GNU or musl engine automatically at runtime. Cross-compile for glibc Linux with `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build .`. When cross-compiling a musl binary from a non-musl host, also set the dynamic linker (`-ldflags '-I /lib/ld-musl-x86_64.so.1'` or `/lib/ld-musl-aarch64.so.1`).
+
+For read-only filesystems or local source checkouts (which do not embed release archives), set `TUI_TEST_NATIVE_LIBRARY` to the absolute path of `libtui_test_ffi.so`, `libtui_test_ffi.dylib`, or `tui_test_ffi.dll`. An invalid override fails immediately rather than falling back. See [`crates/tui-test-ffi/README.md`](https://github.com/microsoft/tui-test/blob/main/crates/tui-test-ffi/README.md#build-and-use).
+
+## Quick start
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+
+    "github.com/microsoft/tui-test/bindings/go"
+)
+
+func main() {
+    terminal, err := tuitest.Ephemeral("example", tuitest.ClientOptions{})
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer terminal.CloseQuiet()
+
+    if _, err := terminal.Open(tuitest.OpenOptions{}); err != nil {
+        log.Print(err)
+        return
+    }
+    if err := terminal.Submit(tuitest.Ptr("echo hello")); err != nil {
+        log.Print(err)
+        return
+    }
+    if err := terminal.WaitCommand(tuitest.WaitOptions{}); err != nil {
+        log.Print(err)
+        return
+    }
+    output, err := terminal.GetOutput()
+    if err != nil {
+        log.Print(err)
+        return
+    }
+    if output != nil {
+        fmt.Print(*output)
+    }
+}
+```
+
+Verify a published install without a shell by running `go run github.com/microsoft/tui-test/bindings/go/examples/smoke`.
+
+## Sessions and options
+
+`tuitest.New(session, ClientOptions{})` binds a named session (`TUI_TEST_SESSION` or `"default"` when empty), while `tuitest.Ephemeral(prefix, ClientOptions{})` generates a unique name. Pointer fields (created with `tuitest.Ptr(v)`) distinguish omitted options from explicit zero or `false` values, and durations use `*time.Duration`.
+
+`ClientOptions` configures `Backend` (`Alacritty`, `Ghostty`, `Rio`, `XtermJS`), `Profile`, `Style` (`*RenderStyle`), `Timeouts`, `ScreenHistoryLimit`, `Recording` (`*AutomaticRecording`), `Artifacts` (`*ArtifactOptions`), `Trace` (`*TraceOptions`), and `Context` (`*ExecutionContext`). `SpawnOptions` (embedded by `OpenOptions` alongside `Shell`) accepts per-launch `Backend`, `Cols`, `Rows`, `Cwd`, `Env`, `WaitReady`, `Restart`, `Retries`, `Profile`, `Style`, `Timeouts`, `Recording`, and `Context`.
+
+## Client methods
+
+Run `go doc github.com/microsoft/tui-test/bindings/go` for complete struct definitions.
+
+| Area | Methods |
+| --- | --- |
+| Package helpers | `New`, `Ephemeral`, `Ptr`, `Sessions`, `CloseAll`, `Recording` |
+| Lifecycle & trace | `Open`, `Run`, `Restart`, `Interrupt`, `FinishTrace`, `Close`, `CloseWithOptions`, `CloseQuiet`, `Session` |
+| Input & signals | `Type`, `Write`, `Submit`, `Press`, `Keyboard` (`Press`, `Down`, `Repeat`, `Up`), `Mouse` (`Click`, `Move`, `Down`, `Up`, `Drag`, `Scroll`), `Resize`, `Signal`, `Kill` |
+| Native history | `Scroll(int32)`, `ScrollToTop`, `ScrollToBottom`, `GetViewport` |
+| Inspection | `State`, `Text`, `PackedScreen`, `Cells`, `GetCommand`, `GetOutput`, `GetExitCode`, `GetCwd`, `GetCursor`, `GetModes`, `GetColors`, `GetSize`, `GetTitle`, `GetClipboard`, `GetBellCount`, `GetBellEvents` |
+| Waits & assertions | `WaitReady`, `WaitCommand`, `WaitExit`, `WaitIdle`, `WaitTitle`, `WaitClipboard`, `WaitBell`, `ExpectTitle`, `ExpectOutput`, `ExpectExitCode`, `ExpectBellCount`, `ExpectCursor`, `ExpectMode`, `ExpectColors`, `ExpectSnapshot` |
+| Captures | `Screenshot`, `StartRecording`, `PauseRecording`, `ResumeRecording`, `StopRecording` |
+
+## `Locator`
+
+```go
+save := terminal.GetByText("Save", tuitest.TextSelectorOptions{
+    Scope: &tuitest.TextScope{
+        After:  &tuitest.TextAnchor{Text: "Network"},
+        Before: &tuitest.TextAnchor{Text: "Advanced"},
+    },
+}).WithStyle(tuitest.TextStyle{Bold: tuitest.Ptr(true)}).
+    RelativeTo(terminal.GetByText("Settings", tuitest.TextSelectorOptions{}), tuitest.After)
+
+if err := save.Unique().Click(tuitest.LocatorClickOptions{}); err != nil {
+    t.Fatal(err)
+}
+```
+
+- Create or chain with `GetByText`, `GetByStyle`, `GetByLink`, `WithStyle`, and `RelativeTo(parent, direction)` (`Within`, `After`, `Before`).
+- Compose with `And(other)`, `Or(other)`, and `Filter(LocatorFilterOptions{Has, HasNot})`.
+- Select occurrences with `Any`, `Unique`, `First`, `Last`, or `Nth(index)`.
+- Inspect or act with `Locations`, `Location`, `Count`, `All`, `Wait`, `Expect`, `Click`, `Highlight`, and `HighlightMatches`.
+
+## Errors and `tuitesttest`
+
+Unwrap `*tuitest.Error` with `errors.As` to read `Kind` (`AssertionError`, `UsageError`, `NoSessionError`, `InternalError`), `Operation`, `Details` (`*FailureDetails`), and `Artifact` (`*FailureArtifactRef`).
+
+In `testing` suites, import `github.com/microsoft/tui-test/bindings/go/tuitesttest` and call `tuitesttest.New(t, tuitesttest.Options{})`. It allocates a unique session name, registers `t.Cleanup` before launching the terminal, forwards `t.Failed()` so `TraceOnFailure` retains failed test traces automatically, and stays safe across `t.Parallel()` tests.

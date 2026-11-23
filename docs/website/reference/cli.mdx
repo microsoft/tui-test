@@ -1,0 +1,144 @@
+---
+title: CLI reference
+description: Subcommands, global flags, nested locator query JSON, output schemas, and exit codes for the tui-test CLI.
+editUrl: false
+---
+
+## Synopsis
+
+```sh
+tui-test [GLOBAL OPTIONS] COMMAND [ARGS...]
+tui-test [GLOBAL OPTIONS] -- PROGRAM [ARGS...]
+tui-test -V | --version [--json]
+```
+
+Passing `-- PROGRAM [ARGS...]` invokes `run`. `-V` / `--version` prints the `tui-test`, terminal emulator (`alacritty`, `ghostty`, `rio`, `xterm.js`), `portable-pty`, and Windows bundled ConPTY versions without starting a daemon.
+
+## Global options
+
+| Flag | Description |
+| --- | --- |
+| `--session NAME` | Target session name (defaults to `TUI_TEST_SESSION`, then `default`). |
+| `--json` | Emit structured JSON (`{"ok":true,"data":...}` / `{"ok":false,"error":...}` on operational commands; `--version --json` prints the version object directly). |
+| `-v`, `--verbose` | Write detailed session logs. |
+| `--failure-artifacts DIR` | Export failure diagnostics to `DIR` on assertion failure. |
+| `--failure-artifact-mode MODE` | `none`, `text`, `html`, or `all` (default when `--failure-artifacts` is set). |
+| `--failure-artifact-recording` | Copy the automatic asciinema cast into exported failure artifacts. |
+| `--diagnostic-context KEY=VALUE` | Attach repeatable caller metadata to failure details. |
+| `--operation-name NAME` | Override the operation name recorded in diagnostics. |
+| `--context-file PATH` | Load a serialized `ExecutionContext` JSON file. |
+
+## Session and daemon commands
+
+| Command | Description |
+| --- | --- |
+| `open [spawn-options] [--shell NAME]` | Open a shell (reuses a live session unless `--restart` is passed). |
+| `run [spawn-options] PROGRAM [ARGS...]` | Launch an executable directly. |
+| `restart [--graceful-timeout MS]` | Replay the last successful spawn (default 5000 ms grace period). |
+| `interrupt` | Cancel pending waits immediately and terminate the child while keeping the session. |
+| `trace finish passed\|failed` | Finalize the active trace outcome without closing the session. |
+| `sessions` | List active CLI daemon sessions. |
+| `close [--all]` | Close the selected session or all CLI sessions. |
+| `daemon start \| status \| stop [--all]` | Manage background session daemons directly. |
+
+Spawn options shared by `open` and `run`: `--backend alacritty|ghostty|rio|xtermjs`, `--cols N`, `--rows N`, `--cwd PATH`, repeatable `--env KEY=VALUE`, `--wait-ready` / `--no-wait-ready`, `--restart`, `--config PATH`, `--profile NAME`, `--timeout-text MS`, `--timeout-idle MS`, `--timeout-command MS`, `--timeout-exit MS`, `--timeout-ready MS`, `--screen-history-limit COUNT`, and `--recording-mode disabled|on-failure|always`.
+
+## Text and nested query locators
+
+```sh
+tui-test find|resolve|wait|expect|click|highlight text TEXT [options]
+tui-test find|resolve|wait|expect|click|highlight query (--query JSON | --query-file PATH) [action-options]
+```
+
+- `find` returns current `TextMatch` spans without waiting; `resolve` requires a single match without waiting.
+- `wait` and `expect` retry until the locator matches (add `--not` for absence and `--timeout MS`).
+- `click` retries for one match on the live viewport and clicks its middle cell (`--button left|middle|right`, `--alt`, `--ctrl`, `--shift`, `--clicks N`, `--timeout MS`).
+- `highlight` marks matches in screenshots and `monitor` (`--timeout MS`; returns matches with `--json`).
+
+Text flags: `--regex`, `--full`, `--whitespace exact|normalize`, `--after-text TEXT`, `--before-text TEXT`, `--after-regex`, `--before-regex`, `--after-match MODE`, `--before-match MODE`, `--after-nth N`, `--before-nth N`, `--match any|unique|first|last`, `--nth N`, `--link URI` (`""` requires unlinked cells), and whole-match style flags (`--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, `--blink`; boolean flags accept `=false`).
+
+### Nested locator queries
+
+`query` subcommands accept a serialized Rust `LocatorQuery` via `--query JSON` or `--query-file PATH` for style-only, link-only, relative, intersected (`and`), unioned (`or`), and filtered (`filter`) queries:
+
+```json
+{
+  "selector": {
+    "kind": "and",
+    "selector": {
+      "left": {
+        "selector": { "kind": "text", "selector": { "text": "Save" } },
+        "within": { "selector": { "kind": "text", "selector": { "text": "Settings" } } },
+        "direction": "after",
+        "style": { "bold": true }
+      },
+      "right": { "selector": { "kind": "link", "selector": { "uri": "app://save" } } }
+    }
+  },
+  "occurrence": "unique"
+}
+```
+
+Query object fields are `selector` (`kind`: `"text"`, `"style"`, `"link"`, `"and"`, `"or"`, `"filter"`), optional `occurrence` (`"any"`, `"unique"`, `"first"`, `"last"`, or `{"nth": N}`), optional leaf `within` parent query, optional `direction` (`"within"`, `"after"`, `"before"`), and optional leaf whole-match `style`.
+
+## Input and process commands
+
+| Command | Description |
+| --- | --- |
+| `submit [TEXT]` | Type optional text and press Enter. |
+| `type TEXT` / `write DATA` | Type text or write raw bytes without Enter. |
+| `key press\|down\|repeat\|up KEYS...` | Send named keys and `+`-joined modifiers (`Ctrl+C`, `Alt+Enter`, `F1`..`F12`). |
+| `mouse click [X Y] [--on-text TEXT] [button-opts] [--clicks N]` | Click zero-based cell coordinates or matched text. |
+| `mouse move X Y` / `down X Y` / `up X Y` / `drag X1 Y1 X2 Y2` | Pointer movement, button transitions, and drag (`--button`, `--alt`, `--ctrl`, `--shift`). |
+| `mouse scroll up\|down [--amount N]` | Send mouse wheel events to the child application. |
+| `resize COLS ROWS` | Resize the PTY and terminal grid. |
+| `signal INT\|TERM\|KILL\|QUIT` / `kill` | Send terminal interrupt (`INT`) or terminate the child process. |
+
+## Inspection and scrollback commands
+
+| Command | Description |
+| --- | --- |
+| `state` | Print full session state and visible text. |
+| `text [--full]` | Print visible viewport text or full scrollback + live screen. |
+| `packed-screen [--full] --json` | Return `{ cols, rows, text }` with untrimmed spaces and blank rows. |
+| `cells X Y [W H]` | Return cell characters, colors, attributes, and OSC 8 links. |
+| `get FIELD` | Read `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`, `viewport`, `size`, `title`, `clipboard`, `bells`, or `bell-events`. |
+| `scroll up\|down [LINES]` / `scroll top\|bottom` | Move the native history viewport without sending input to the app. |
+
+## Waits and assertions
+
+| Command | Description |
+| --- | --- |
+| `wait ready \| command \| exit \| idle \| bell [--timeout MS]` | Lifecycle, quiet-screen, and bell waits. |
+| `wait title TEXT [--regex --not --timeout MS]` | Wait for window title match or non-match. |
+| `wait clipboard [TEXT] [--regex --timeout MS]` | Wait for next OSC 52 update or content match. |
+| `expect title TEXT [--regex --not --timeout MS]` | Assert window title. |
+| `expect output TEXT [--regex]` / `expect exit-code CODE [--timeout MS]` | Assert tracked shell output or exit status. |
+| `expect bell COUNT [--timeout MS]` | Wait until cumulative bell count reaches `COUNT`. |
+| `expect mode NAME [--off --timeout MS]` | Assert a boolean terminal mode. |
+| `expect cursor [--x N] [--y N] [--visible BOOL] [--shape SHAPE] [--timeout MS]` | Assert cursor coordinates, visibility, or shape. |
+| `expect colors [--fg COLOR] [--bg COLOR] [--cursor COLOR] [--palette IDX=COLOR] [--timeout MS]` | Assert default or indexed palette colors. |
+| `expect snapshot NAME [-u] [--include-style] [--include-title] [--cwd DIR]` | Compare or update a screen snapshot baseline. |
+
+## Captures, tapes, monitor, and agent tools
+
+| Command | Description |
+| --- | --- |
+| `screenshot [PATH] [-o PATH] [--full] [--zoom N] [--background COLOR \| --transparent]` | Print screen text or write `.svg` / `.png`. |
+| `record start PATH [--format FMT] [--fps N] [--speed N] [--idle-time-limit SEC] [--zoom N] [--background COLOR \| --transparent]` | Start `.gif`, `.apng`, `.mp4`, or `.cast` capture. |
+| `record pause` / `record resume` / `record stop` | Pause, resume (raster only), or finish an active recording. |
+| `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema cast. |
+| `tape check PATH [--json]` / `tape run PATH [--json]` | Validate or execute a trusted `.tape` script in an isolated session. |
+| `monitor [--interactive]` | Watch a live CLI session (`q`/`Esc` exits) or forward input with `--interactive` (`Ctrl+]` detaches). |
+| `usage` / `agent-context` / `skill [--add]` | Print CLI usage, JSON schema, or print/install the agent skill interactively. |
+
+## Exit codes
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Command succeeded |
+| `1` | Wait or assertion failed |
+| `2` | Invalid arguments, configuration, or tape preflight failure |
+| `3` | Target session does not exist |
+| `4` | Daemon startup or IPC transport error |
+| `5` | Internal engine error |

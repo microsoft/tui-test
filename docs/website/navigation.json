@@ -1,0 +1,56 @@
+{
+  "entry": "/docs/install/",
+  "redirects": [
+    { "from": "/docs", "to": "/docs/install/", "status": 302 },
+    { "from": "/docs/", "to": "/docs/install/", "status": 302 }
+  ],
+  "sidebar": [
+    {
+      "label": "Getting started",
+      "items": [
+        "install",
+        "getting-started/ai-agents",
+        "getting-started/quickstart",
+        "getting-started/testing"
+      ]
+    },
+    {
+      "label": "Guides",
+      "items": [
+        "guides/sessions",
+        "guides/locators",
+        "guides/input",
+        "guides/assertions",
+        "guides/state-and-scrollback",
+        "guides/snapshots"
+      ]
+    },
+    {
+      "label": "Capture and debugging",
+      "items": [
+        "capture/screenshots",
+        "capture/recordings",
+        "capture/tapes",
+        "capture/traces",
+        "capture/monitor"
+      ]
+    },
+    {
+      "label": "Language APIs",
+      "items": [
+        "api/javascript",
+        "api/python",
+        "api/rust",
+        "api/go"
+      ]
+    },
+    {
+      "label": "Reference",
+      "collapsed": true,
+      "items": [
+        "reference/cli",
+        "reference/configuration"
+      ]
+    }
+  ]
+}

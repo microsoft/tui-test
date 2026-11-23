@@ -54,7 +54,7 @@ impl From<ShellArg> for Shell {
     }
 }
 
-/// Which terminal profile a session runs with.
+/// Configuration used to start a session.
 #[derive(Args, Clone, Default)]
 pub struct ProfileArgs {
     /// Config file to read (default: ./tui-test.toml, then the platform config
@@ -64,6 +64,9 @@ pub struct ProfileArgs {
     /// Named profile from the config file (default: `default`).
     #[arg(long, value_name = "NAME")]
     pub profile: Option<String>,
+    /// Keep an automatic asciicast without enabling a trace. Active tracing takes precedence.
+    #[arg(long, value_enum)]
+    pub recording_mode: Option<AutomaticRecordingModeArg>,
 }
 
 impl ProfileArgs {
@@ -72,7 +75,15 @@ impl ProfileArgs {
     /// resolve a project-local config against.
     pub fn resolve(&self) -> anyhow::Result<tui_test::profile::Settings> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        tui_test::profile::resolve_settings(self.config.as_deref(), self.profile.as_deref(), &cwd)
+        let mut settings = tui_test::profile::resolve_settings(
+            self.config.as_deref(),
+            self.profile.as_deref(),
+            &cwd,
+        )?;
+        if let Some(mode) = self.recording_mode {
+            settings.recording.mode = mode.into();
+        }
+        Ok(settings)
     }
 }
 
@@ -277,9 +288,6 @@ pub struct OpenArgs {
     /// Replace a live session instead of reusing it.
     #[arg(long, visible_alias = "force")]
     pub restart: bool,
-    /// Keep an automatic asciicast without enabling a trace. Active tracing takes precedence.
-    #[arg(long, value_enum)]
-    pub recording_mode: Option<AutomaticRecordingModeArg>,
     #[command(flatten)]
     pub profile: ProfileArgs,
     #[command(flatten)]
@@ -320,9 +328,6 @@ pub struct RunArgs {
     /// Replace a live session instead of reusing it.
     #[arg(long, visible_alias = "force")]
     pub restart: bool,
-    /// Keep an automatic asciicast without enabling a trace. Active tracing takes precedence.
-    #[arg(long, value_enum)]
-    pub recording_mode: Option<AutomaticRecordingModeArg>,
     #[command(flatten)]
     pub profile: ProfileArgs,
     #[command(flatten)]
