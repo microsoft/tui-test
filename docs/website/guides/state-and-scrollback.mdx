@@ -30,9 +30,9 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
     state = await terminal.state()
     visible = await terminal.text()
     full_history = await terminal.text(full=True)
-    packed = await terminal.packed_screen()
+    packed_utf8, cols, rows = await terminal.packed_screen()
     header_cells = await terminal.cells(0, 0, 40, 1)
-    print(state["size"], len(visible), len(full_history), packed["cols"], len(header_cells))
+    print(state["size"], len(visible), len(full_history), len(packed_utf8), cols, rows, len(header_cells))
     ```
   </TabItem>
   <TabItem label="Rust">

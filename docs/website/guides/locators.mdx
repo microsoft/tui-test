@@ -58,7 +58,7 @@ By default, `getByText` matches exact substrings on the visible viewport. Enable
     if err := terminal.GetByText(`item \d+`, tuitest.TextSelectorOptions{Regex: true}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
         t.Fatal(err)
     }
-    if err := terminal.GetByText("Name Value", tuitest.TextSelectorOptions{Whitespace: tuitest.WhitespaceNormalize}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+    if err := terminal.GetByText("Name Value", tuitest.TextSelectorOptions{Whitespace: tuitest.Normalize}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
         t.Fatal(err)
     }
     ```
