@@ -10,15 +10,20 @@ permissions:
 
 jobs:
   check:
+    # Keep required check names stable when runner images change.
+    name: check (${{ matrix.name }}, ${{ matrix.bin }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          - name: macos-latest
+            os: macos-latest
             bin: target/debug/tui-test
-          - os: windows-2022
+          - name: windows-latest
+            os: windows-2022
             bin: target/debug/tui-test.exe
-          - os: ubuntu-24.04
+          - name: ubuntu-latest
+            os: ubuntu-24.04
             bin: target/debug/tui-test
     runs-on: ${{ matrix.os }}
     env:
