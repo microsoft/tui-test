@@ -3,16 +3,12 @@
 </h1>
 
 <p align="center">
-  <strong>The testing framework for CLI / TUI apps</strong>
-</p>
-
-<p align="center">
   <a href="https://tui-test.dev/docs/">Documentation</a> |
   <a href="https://tui-test.dev/docs/install/">Installation</a> |
   <a href="https://github.com/microsoft/tui-test/releases">Releases</a>
 </p>
 
-`tui-test` controls, inspects, tests, and records real terminal apps on Windows, Linux, and macOS. Use the CLI or the Rust, Python, JavaScript, and Go libraries for tests and AI agent workflows.
+`tui-test` controls, inspects, tests, and records real shell sessions and full-screen terminal apps on Windows, Linux, and macOS. It addition to it's cli, it has libraries for Rust, Python, Javascript, or Go. `tui-test` gives AI agents the ability to record videos/gifs of terminals, perform terminal operations, create end-to-end tests for terminal applications, and it exposes structured access to terminal state.
 
 ## Installation
 
@@ -37,22 +33,18 @@ brew tap microsoft/tui-test https://github.com/microsoft/tui-test
 brew install tui-test
 ```
 
-You can also download a binary from [GitHub Releases](https://github.com/microsoft/tui-test/releases).
-
 ### Libraries
 
 | Language | Install |
 | --- | --- |
-| JavaScript / TypeScript | `npm install @microsoft/tui-test` |
+| JavaScript  | `npm install @microsoft/tui-test` |
 | Python | `pip install tui-test` |
 | Rust | `cargo add tui-test-rs@0.1.1` |
 | Go | `go get github.com/microsoft/tui-test/bindings/go@v0.1.1` |
 
-Libraries run the terminal engine in-process without requiring the CLI binary. See the [installation guide](https://tui-test.dev/docs/install/) for runtime requirements and supported platforms.
+See the [installation guide](https://tui-test.dev/docs/install/) for runtime requirements and supported platforms.
 
 ## Examples
-
-Replace `my-app` with the program you want to test.
 
 ### CLI
 
@@ -167,7 +159,7 @@ func main() {
 }
 ```
 
-See the [documentation](https://tui-test.dev/docs/) for [test runner integration](https://tui-test.dev/docs/getting-started/testing/), [locators](https://tui-test.dev/docs/guides/locators/), [recordings](https://tui-test.dev/docs/capture/recordings/), [failure traces](https://tui-test.dev/docs/capture/traces/), and the [CLI reference](https://tui-test.dev/docs/reference/cli/).
+See the [documentation](https://tui-test.dev/docs/) for more examples and detailed documentation
 
 ## Contributing
 
