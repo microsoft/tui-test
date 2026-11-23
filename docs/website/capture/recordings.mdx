@@ -138,7 +138,7 @@ Raster recordings sample the live terminal at `fps` (default `30`) and preserve 
     if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
         t.Fatal(err)
     }
-    _, err = terminal.StartRecording("demo.gif", tuitest.RecordingOptions{
+    err = terminal.StartRecording("demo.gif", tuitest.RecordingOptions{
         FPS:           tuitest.Ptr(uint32(30)),
         IdleTimeLimit: tuitest.Ptr(1.5),
         Speed:         tuitest.Ptr(1.25),

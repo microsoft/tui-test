@@ -1,13 +1,13 @@
 # tui-test for Go
 
-Control, inspect, test, and record terminal apps from Go 1.26 or newer. Published modules bundle the prebuilt native engine and do not require Rust, Zig, cgo, or the `tui-test` CLI.
+Control, inspect, test, and record terminal apps from Go 1.26 or newer.
 
 ```sh
 go get github.com/microsoft/tui-test/bindings/go@v0.1.1
 go run github.com/microsoft/tui-test/bindings/go/examples/smoke
 ```
 
-Published modules support Linux and macOS on `amd64` and `arm64`, plus Windows on `amd64`. Linux requires glibc 2.28+ or musl 1.2+ and a writable user cache on first run (or set `TUI_TEST_NATIVE_LIBRARY` to an explicit shared library path).
+Published modules support Linux and macOS on `amd64` and `arm64`, plus Windows on `amd64`. On first native use, the module extracts the bundled library into the user cache (`os.UserCacheDir()`, or set `TUI_TEST_NATIVE_LIBRARY` to an explicit shared library path); Linux builds target glibc 2.28+ or musl 1.2+.
 
 ```go
 package main

@@ -19,7 +19,7 @@ Passing `-- PROGRAM [ARGS...]` invokes `run`. `-V` / `--version` prints the `tui
 | Flag | Description |
 | --- | --- |
 | `--session NAME` | Target session name (defaults to `TUI_TEST_SESSION`, then `default`). |
-| `--json` | Emit `{"ok":true,"data":...}` or `{"ok":false,"error":...}` on stdout. |
+| `--json` | Emit structured JSON (`{"ok":true,"data":...}` / `{"ok":false,"error":...}` on operational commands; `--version --json` prints the version object directly). |
 | `-v`, `--verbose` | Write detailed session logs. |
 | `--failure-artifacts DIR` | Export failure diagnostics to `DIR` on assertion failure. |
 | `--failure-artifact-mode MODE` | `none`, `text`, `html`, or `all` (default when `--failure-artifacts` is set). |
@@ -129,8 +129,8 @@ Query object fields are `selector` (`kind`: `"text"`, `"style"`, `"link"`, `"and
 | `record pause` / `record resume` / `record stop` | Pause, resume (raster only), or finish an active recording. |
 | `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema cast. |
 | `tape check PATH [--json]` / `tape run PATH [--json]` | Validate or execute a trusted `.tape` script in an isolated session. |
-| `monitor [--interactive]` | Watch a live CLI session or forward input (`Ctrl+]` detaches). |
-| `usage` / `agent-context` / `skill [--add]` | Print CLI usage, JSON schema, or print/install the agent skill. |
+| `monitor [--interactive]` | Watch a live CLI session (`q`/`Esc` exits) or forward input with `--interactive` (`Ctrl+]` detaches). |
+| `usage` / `agent-context` / `skill [--add]` | Print CLI usage, JSON schema, or print/install the agent skill interactively. |
 
 ## Exit codes
 

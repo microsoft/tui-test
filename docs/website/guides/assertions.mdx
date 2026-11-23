@@ -219,15 +219,15 @@ Poll terminal emulator state directly in Rust without manual loops when testing 
         X:       tuitest.Ptr(uint16(4)),
         Y:       tuitest.Ptr(uint16(2)),
         Visible: tuitest.Ptr(true),
-        Shape:   tuitest.CursorBar,
-    }, tuitest.WaitOptions{})
+        Shape:   tuitest.Ptr("bar"),
+    })
     if err != nil {
         t.Fatal(err)
     }
     err = terminal.ExpectColors(tuitest.ColorExpectation{
         Foreground: tuitest.Ptr("#e6edf3"),
         Palette:    map[uint8]string{1: "#ff6b6b"},
-    }, tuitest.WaitOptions{})
+    })
     if err != nil {
         t.Fatal(err)
     }

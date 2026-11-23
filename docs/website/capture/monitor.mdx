@@ -31,4 +31,4 @@ tui-test --session demo monitor --interactive
 
 Interactive mode mirrors the session's active keyboard, bracketed-paste, and SGR mouse reporting modes so the child application receives input in the exact protocol it negotiated. If another command scrolled the session into native scrollback history, run `tui-test --session demo scroll bottom` before clicking in interactive mode.
 
-Press `Ctrl+]` at any time to detach from the monitor while leaving the background session running. Run `tui-test --session demo close` when you want to terminate the session itself.
+Press `Ctrl+]` to detach from an interactive monitor (`q`, `Esc`, or `Ctrl+C` exits the default read-only monitor) while leaving the background session running. Run `tui-test --session demo close` when you want to terminate the session itself.

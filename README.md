@@ -8,7 +8,7 @@
   <a href="https://github.com/microsoft/tui-test/releases">Releases</a>
 </p>
 
-`tui-test` controls, inspects, tests, and records real shell sessions and full-screen terminal apps on Windows, Linux, and macOS. It addition to it's cli, it has libraries for Rust, Python, Javascript, or Go. `tui-test` gives AI agents the ability to record videos/gifs of terminals, perform terminal operations, create end-to-end tests for terminal applications, and it exposes structured access to terminal state.
+`tui-test` controls, inspects, tests, and records real shell sessions and full-screen terminal apps on Windows, Linux, and macOS. In addition to its CLI, it has libraries for Rust, Python, JavaScript, and Go. `tui-test` gives AI agents the ability to record videos/gifs of terminals, perform terminal operations, create end-to-end tests for terminal applications, and expose structured access to terminal state.
 
 ## Installation
 
@@ -31,6 +31,20 @@ Homebrew:
 ```sh
 brew tap microsoft/tui-test https://github.com/microsoft/tui-test
 brew install tui-test
+```
+
+### Agent skill
+
+Install with Vercel's [`skills`](https://github.com/vercel-labs/skills) CLI:
+
+```sh
+npx skills add microsoft/tui-test --skill tui-test
+```
+
+Or install interactively from the `tui-test` CLI:
+
+```sh
+tui-test skill --add
 ```
 
 ### Libraries
@@ -159,7 +173,7 @@ func main() {
 }
 ```
 
-See the [documentation](https://tui-test.dev/docs/) for more examples and detailed documentation
+See the [documentation](https://tui-test.dev/docs/) for more examples and detailed documentation.
 
 ## Contributing
 
