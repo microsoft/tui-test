@@ -163,7 +163,9 @@ impl ProgressBar {
         self.state = state;
         if state == ProgressState::Inactive {
             self.progress = Some(0);
-        } else if state != ProgressState::Indeterminate && progress.is_some() {
+        } else if state == ProgressState::Normal
+            || (state != ProgressState::Indeterminate && progress.is_some())
+        {
             self.progress = progress;
         }
     }

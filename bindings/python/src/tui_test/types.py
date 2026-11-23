@@ -306,10 +306,10 @@ class State:
     text: str
     session_shell: Optional[str]
     bell_count: int = 0
-    progress_bar: Optional[ProgressBar] = None
     modes: Dict[str, bool] = field(default_factory=dict)
     mouse_mode: str = "none"
     colors: Dict[str, Any] = field(default_factory=dict)
+    progress_bar: Optional[ProgressBar] = None
     program_statuses: Optional[List[ProgramStatus]] = None
 
     @classmethod

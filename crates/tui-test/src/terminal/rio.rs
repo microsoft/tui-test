@@ -577,6 +577,15 @@ mod tests {
             &mut RioEmu::new(10, 2, &Profile::default()),
             false,
         );
+        let mut emu = RioEmu::new(10, 2, &Profile::default());
+        emu.process(b"\x1b]9;4;1;80\x07\x1b]9;4;1\x07");
+        assert_eq!(
+            emu.progress_bar(),
+            Some(crate::api::ProgressBar {
+                state: crate::api::ProgressState::Normal,
+                progress: None,
+            })
+        );
     }
 
     #[test]
