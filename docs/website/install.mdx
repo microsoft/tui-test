@@ -10,7 +10,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 ## CLI
 
-The install script downloads the latest stable release (`x86_64` and `aarch64` on macOS and Linux, `x86_64` on Windows).
+The install script downloads the latest stable release for your platform. Releases target `x86_64` and `aarch64` on macOS, Linux, and Windows. Windows ARM64 requires a release newer than `0.1.1`.
 
 <Tabs>
   <TabItem label="macOS and Linux">
@@ -107,4 +107,4 @@ When running against a local source checkout, testing a custom engine binary, or
 
 ### Requirements
 
-Prebuilt libraries for JavaScript, Python, and Go support macOS (`x86_64` and `arm64`), Linux (`x86_64` and `arm64`), and Windows (`x86_64`). On Linux, prebuilt packages require glibc 2.28+ or musl 1.2+. `tui-test-rs` compiles from source with Cargo against your target's standard library.
+Prebuilt libraries for JavaScript, Python, and Go support `x86_64` and `arm64` on macOS, Linux, and Windows. For Windows ARM64, use a package newer than `0.1.1`. On Linux, prebuilt packages require glibc 2.28+ or musl 1.2+. `tui-test-rs` compiles from source with Cargo against your target's standard library.

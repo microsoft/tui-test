@@ -89,6 +89,8 @@ jobs:
             os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-2022
+          - target: aarch64-pc-windows-msvc
+            os: windows-2022
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -104,6 +106,10 @@ jobs:
         with:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
+
+      - name: Patch Zig 0.16 stdlib alignment for Windows ARM64
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: node .github/scripts/release/patch-zig-windows-arm64.mjs
 
       - if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
@@ -172,6 +178,9 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-2022
             args: --target x86_64-pc-windows-msvc
+          - target: aarch64-pc-windows-msvc
+            os: windows-2022
+            args: --target aarch64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -195,6 +204,10 @@ jobs:
         with:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
+
+      - name: Patch Zig 0.16 stdlib alignment for Windows ARM64
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: node .github/scripts/release/patch-zig-windows-arm64.mjs
 
       - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         if: matrix.zigbuild && !endsWith(matrix.target, '-gnu')
@@ -386,6 +399,9 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-2022
             wheel: cp311-win_amd64
+          - target: aarch64-pc-windows-msvc
+            os: windows-2022
+            wheel: cp311-win_arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -410,6 +426,10 @@ jobs:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
 
+      - name: Patch Zig 0.16 stdlib alignment for Windows ARM64
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: node .github/scripts/release/patch-zig-windows-arm64.mjs
+
       - name: Build Python wheel
         uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e # v4.3.5
         with:
@@ -427,6 +447,7 @@ jobs:
           CIBW_MUSLLINUX_X86_64_IMAGE: musllinux_1_2
           CIBW_MUSLLINUX_AARCH64_IMAGE: musllinux_1_2
           CIBW_TEST_COMMAND: python {project}/bindings/python/examples/shared_library.py
+          CIBW_TEST_SKIP: "*-win_arm64"
 
       - name: Build Python sdist
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -512,6 +533,7 @@ jobs:
             tui-test-linux-arm64-musl
             tui-test-linux-x64-gnu
             tui-test-linux-x64-musl
+            tui-test-win32-arm64-msvc
             tui-test-win32-x64-msvc
             tui-test
           )
