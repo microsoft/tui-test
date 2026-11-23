@@ -79,7 +79,7 @@ Per-call `style`, `recording`, and `context` fields on `open` or `run` override 
 | `keyboard.press` / `down` / `repeat` / `up` | Send named keys and modifiers (`Ctrl+C`, `Alt+Enter`, `F1`..`F12`, arrows). |
 | `mouse.click` / `move` / `down` / `up` / `drag` / `scroll` | Send zero-based cell mouse actions (`button`, `alt`, `ctrl`, `shift`, `clicks`, `onText`, `amount`). |
 | `resize(cols, rows)` | Resize the PTY and emulator grid. |
-| `scroll(lines)` / `scrollToTop()` / `scrollToBottom()` | Navigate native scrollback (`lines > 0` moves into older output; `0` is live). |
+| `scroll(lines)` / `scrollToTop()` / `scrollToBottom()` | Navigate native scrollback (`lines > 0` moves into older output; `scrollToBottom()` returns to live). |
 | `signal(name)` / `kill()` | Send `"INT"`, `"TERM"`, `"KILL"`, or `"QUIT"`. |
 
 ### State inspection
@@ -92,9 +92,9 @@ Per-call `style`, `recording`, and `context` fields on `open` or `run` override 
 | `cells(x, y, w?, h?)` | `Promise<Cell[]>` |
 | `getViewport()` / `getSize()` | `Promise<Viewport>` (`{ offset, history }`) / `Promise<Size>` |
 | `getCommand()` / `getOutput()` / `getExitCode()` / `getCwd()` | Tracked shell command metadata |
-| `getCursor()` / `getModes()` / `getColors()` | `Cursor`, `Record<string, boolean>`, `State["colors"]` |
-| `getTitle()` / `getClipboard()` | `string \| null` / `string` |
-| `getBellCount()` / `getBellEvents()` | `number` / `BellEvent[]` |
+| `getCursor()` / `getModes()` / `getColors()` | `Promise<Cursor>`, `Promise<Record<string, boolean>>`, `Promise<State["colors"]>` |
+| `getTitle()` / `getClipboard()` | `Promise<string \| null>` / `Promise<string>` |
+| `getBellCount()` / `getBellEvents()` | `Promise<number>` / `Promise<BellEvent[]>` |
 
 ### Waits, assertions, snapshots, and captures
 

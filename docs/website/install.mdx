@@ -1,16 +1,16 @@
 ---
 title: Install tui-test
-description: Install the tui-test CLI or add the JavaScript, Python, Rust, or Go library to your project.
+description: Install the tui-test CLI, agent skill, or JavaScript, Python, Rust, or Go library.
 editUrl: false
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-`tui-test` runs real terminal sessions on Windows, Linux, and macOS. Install the CLI for shell scripts, interactive debugging, and AI agent workflows, or install a language library to run the terminal engine directly inside your test suite.
+`tui-test` runs real terminal sessions on Windows, Linux, and macOS. Install the CLI and agent skill for shell scripts, interactive debugging, and AI agent workflows, or install a language library to run the terminal engine directly inside your test suite.
 
 ## CLI
 
-The install script downloads the latest stable release for your operating system and architecture.
+The install script downloads the latest stable release (`x86_64` and `aarch64` on macOS and Linux, `x86_64` on Windows).
 
 <Tabs>
   <TabItem label="macOS and Linux">
@@ -41,6 +41,22 @@ tui-test --version
 ```
 
 `--version` (or `-V`) prints the `tui-test` version along with the bundled terminal emulator and PTY dependency versions, including the bundled Microsoft ConPTY version on Windows. Add `--json` for machine-readable output. If your shell cannot find `tui-test`, open a new terminal or verify that the install directory is on `PATH`.
+
+## Agent skill
+
+Install the `tui-test` skill for coding agents using Vercel's [`skills`](https://github.com/vercel-labs/skills) CLI:
+
+```sh
+npx skills add microsoft/tui-test --skill tui-test
+```
+
+Or install the embedded skill interactively from the `tui-test` CLI:
+
+```sh
+tui-test skill --add
+```
+
+See [AI agents](/docs/getting-started/ai-agents/) for agent workflows, prompt options, and JSON schema commands.
 
 ## Libraries
 
@@ -75,16 +91,16 @@ Each library runs the terminal engine in-process without needing the `tui-test` 
     Alacritty is enabled by default. Enable `ghostty`, `rio`, or `xtermjs` for additional terminal backends, and `recording-raster` (or `recording-font-jetbrains-mono*` for bundled fonts) for APNG, GIF, and MP4 output. See the [Rust API](/docs/api/rust/) and [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/).
   </TabItem>
   <TabItem label="Go">
-    Requires Go 1.26 or newer. Select a tagged module release so Go downloads the embedded native engines:
+    Requires Go 1.26 or newer. Published module releases bundle the prebuilt native engine and do not require cgo, Rust, Zig, or the CLI:
 
     ```sh
     go get github.com/microsoft/tui-test/bindings/go@v0.1.1
     ```
 
-    Published modules support Linux and macOS on `amd64` and `arm64`, plus Windows on `amd64` (without cgo). Linux requires glibc 2.28+ or musl 1.2+ and a writable user cache on first run. See the [Go API](/docs/api/go/).
+    See the [Go API](/docs/api/go/) for supported platforms, Linux libc baselines, and read-only cache overrides.
   </TabItem>
 </Tabs>
 
 ### Custom native library path
 
-In restricted or air-gapped environments, or when running against a local source checkout, set `TUI_TEST_NATIVE_LIBRARY` to the absolute path of `libtui_test_ffi.so`, `libtui_test_ffi.dylib`, or `tui_test_ffi.dll`. The shared library must match your language package's release version and target platform. See [`crates/tui-test-ffi/README.md`](https://github.com/microsoft/tui-test/blob/main/crates/tui-test-ffi/README.md#build-and-use) for local source builds.
+Published wheels, npm platform packages, and Go modules include the native engine and run offline once installed. When running against a local source checkout, testing a custom engine binary, or running Go where the user cache directory cannot be written, set `TUI_TEST_NATIVE_LIBRARY` to the absolute path of `libtui_test_ffi.so`, `libtui_test_ffi.dylib`, or `tui_test_ffi.dll`. The shared library must match your language package's release version and target platform. See [`crates/tui-test-ffi/README.md`](https://github.com/microsoft/tui-test/blob/main/crates/tui-test-ffi/README.md#build-and-use) for local source builds.

@@ -57,7 +57,7 @@ Key methods on [`Session`](https://docs.rs/tui-test-rs/latest/tui_test/struct.Se
 | --- | --- |
 | `open(OpenOptions)` / `run(RunOptions)` | Spawn a shell or direct executable, returning `OpenResult` (including any automatic `recording` path). |
 | `with_execution_context(ExecutionContext)` | Return a clone carrying default `trace`, `artifact`, `diagnostic_context`, `operation_name`, and `retention` settings. |
-| `execute(Operation)` / `execute_with_context(Operation, &ExecutionContext)` | Run a terminal action, query, wait, assertion, or capture, returning `Result<OperationResult, TuiTestError>`. |
+| `execute(Operation)` / `execute_with_context(Operation, ExecutionContext)` | Run a terminal action, query, wait, assertion, or capture, returning `Result<OperationResult, TuiTestError>`. |
 | `get_by_text` / `get_by_style` / `get_by_link` | Create a lazy [`Locator`](https://docs.rs/tui-test-rs/latest/tui_test/struct.Locator.html). |
 | `interrupt()` | Cancel pending waits immediately and terminate the child without closing the session. |
 | `close()` / `is_open()` | Release the session or check whether a child terminal is open. |
@@ -69,7 +69,7 @@ Key methods on [`Session`](https://docs.rs/tui-test-rs/latest/tui_test/struct.Se
 
 | Area | `Operation` variants |
 | --- | --- |
-| Lifecycle and trace | `Restart`, `FinishTrace { outcome: TraceOutcome }` |
+| Lifecycle and trace | `Restart`, `FinishTrace { failed: bool }` |
 | Input and process | `Write`, `Submit`, `Key { action, keys }`, `Mouse { action }`, `Resize`, `Scroll { target: ScrollTarget }`, `Signal` |
 | Inspection | `State`, `Text { full }`, `PackedScreen { full }`, `Cells { x, y, w, h }`, `GetCommand`, `GetOutput`, `GetExitCode`, `GetCwd`, `GetCursor`, `GetModes`, `GetColors`, `GetSize`, `GetViewport`, `GetTitle`, `GetClipboard`, `GetBellCount`, `GetBellEvents` |
 | Waits and assertions | `WaitReady`, `WaitCommand`, `WaitExit`, `WaitIdle`, `WaitTitle`, `WaitClipboard`, `WaitClipboardMatch`, `WaitBell`, `ExpectTitle`, `ExpectOutput`, `ExpectExitCode`, `ExpectBellCount`, `ExpectCursor`, `ExpectMode`, `ExpectColors`, `Snapshot` |

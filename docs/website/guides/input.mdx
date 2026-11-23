@@ -206,7 +206,7 @@ Prefer `locator.click()` (`tui-test click text`) when clicking UI controls so th
     if err := terminal.Mouse.Drag(10, 5, 30, 5, tuitest.MouseButtonOptions{}); err != nil {
         t.Fatal(err)
     }
-    if err := terminal.Mouse.Scroll(tuitest.ScrollDown, tuitest.MouseScrollOptions{Amount: tuitest.Ptr(uint32(5))}); err != nil {
+    if err := terminal.Mouse.Scroll(tuitest.Down, 5); err != nil {
         t.Fatal(err)
     }
     ```
@@ -260,7 +260,7 @@ Prefer `locator.click()` (`tui-test click text`) when clicking UI controls so th
     if err := terminal.Resize(120, 40); err != nil {
         t.Fatal(err)
     }
-    if err := terminal.Signal(tuitest.SignalInt); err != nil {
+    if err := terminal.Signal("INT"); err != nil {
         t.Fatal(err)
     }
     if err := terminal.Kill(); err != nil {

@@ -6,19 +6,25 @@ editUrl: false
 
 `tui-test` is designed for coding agents that need to run interactive shells, TUI apps, debuggers, or full-screen editors without getting stuck on raw ANSI escape streams.
 
-## Install the built-in skill
+## Install the skill
 
-The CLI ships with a self-contained skill definition and local reference files that agents can load on demand:
+Install the `tui-test` skill from GitHub with Vercel's [`skills`](https://github.com/vercel-labs/skills) CLI:
+
+```sh
+npx skills add microsoft/tui-test --skill tui-test
+```
+
+If `tui-test` is already installed, you can also install the embedded skill and reference files (`cli`, `python`, `javascript`, `rust`, `recipes`, and `tape`) directly from the CLI:
 
 ```sh
 tui-test skill --add
 ```
 
-Run `tui-test skill` without flags to print the skill text to stdout, `tui-test usage` for a compact command summary, or `tui-test agent-context` for the complete machine-readable CLI schema as JSON.
+`tui-test skill --add` prompts interactively for current-directory vs. global home scope and `.agents` (GitHub Copilot / Codex) vs. `.claude` (Claude Code), overwriting existing `tui-test` skill files in the selected destination. Run `tui-test skill` without flags to print the combined Markdown guide to stdout, `tui-test usage` for a compact command summary, or `tui-test agent-context` for the complete machine-readable CLI schema as JSON.
 
 ## CLI sessions vs. library scripts
 
-- Choose the **CLI** when an agent inspects the screen step by step across separate tool calls, or when a human operator wants to watch along with [`tui-test monitor`](/docs/capture/monitor/). Pass `--json` on CLI commands to receive structured `{"ok":true,"data":...}` or `{"ok":false,"error":...}` responses instead of parsing human-formatted text.
+- Choose the **CLI** when an agent inspects the screen step by step across separate tool calls, or when a human operator wants to watch along with [`tui-test monitor`](/docs/capture/monitor/). Pass `--json` on operational CLI commands to receive structured `{"ok":true,"data":...}` or `{"ok":false,"error":...}` responses instead of parsing human-formatted text.
 - Choose a **language library** when the agent is writing repeatable automated tests or running a self-contained script inside a single process.
 
 ## Reliable agent workflow

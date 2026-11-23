@@ -79,7 +79,7 @@ Client attributes are `terminal.session`, `terminal.keyboard`, and `terminal.mou
 
 | Method | Description |
 | --- | --- |
-| `await open(**options)` | Start a shell (`shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `wait_ready`, `restart`, `retries`, `profile`, `style`, `timeouts`, `recording`, `screen_history_limit`, `context`). |
+| `await open(**options)` | Start a shell (`shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `wait_ready`, `restart`, `retries`, `profile`, `style`, `timeouts`, `recording`, `context`). |
 | `await run(program, *args, **options)` | Spawn an executable directly (same keyword options as `open` except `shell`). |
 | `await restart(graceful_timeout=5000)` | Replay the previous spawn. |
 | `await interrupt()` | Cancel pending waits immediately and terminate the child while keeping the session open. |
@@ -105,7 +105,7 @@ Client attributes are `terminal.session`, `terminal.keyboard`, and `terminal.mou
 | --- | --- |
 | `await state()` | `State` |
 | `await text(full=False)` | `str` |
-| `await packed_screen(full=False)` | `dict` with read-only UTF-8 `memoryview`, `cols`, and `rows` |
+| `await packed_screen(full=False)` | `tuple[memoryview, int, int]` (`(utf8, cols, rows)`) |
 | `await cells(x, y, w=1, h=1)` | `list[Cell]` |
 | `await get_viewport()` / `await get_size()` | `Viewport` (`offset`, `history`) / `dict` (`cols`, `rows`) |
 | `await get_command()` / `await get_output()` / `await get_exit_code()` / `await get_cwd()` | Tracked shell command metadata |
@@ -149,9 +149,9 @@ await save.unique().click()
 
 | Method | Description |
 | --- | --- |
-| `get_by_text(text, *, regex=False, full=False, whitespace="exact", scope=None, match_style=None, direction="within")` | Match text. |
-| `get_by_style(style, *, full=False, match_style=None, direction="within")` | Match styled cell runs or filter parent matches. |
-| `get_by_link(uri, *, full=False, match_style=None, direction="within")` | Match OSC 8 link runs (`""` matches unlinked cells). |
+| `get_by_text(text, *, regex=False, full=False, whitespace="exact", scope=None)` | Match text (chained `Locator.get_by_text` also accepts `direction`). |
+| `get_by_style(style, *, full=False)` | Match styled cell runs (chained `Locator.get_by_style` also accepts `direction`). |
+| `get_by_link(uri, *, full=False)` | Match OSC 8 link runs (`""` matches unlinked cells; chained `Locator.get_by_link` also accepts `direction`). |
 | `with_style(style)` | Apply a whole-match `TextStyle` constraint to a leaf query. |
 | `relative_to(parent, direction="within")` | Scope `"within"`, `"after"`, or `"before"` a locator on the same client. |
 | `and_(other)` / `or_(other)` | Intersect or union matched cells into contiguous per-row runs. |

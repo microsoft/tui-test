@@ -76,7 +76,7 @@ Verify a published install without a shell by running `go run github.com/microso
 
 `tuitest.New(session, ClientOptions{})` binds a named session (`TUI_TEST_SESSION` or `"default"` when empty), while `tuitest.Ephemeral(prefix, ClientOptions{})` generates a unique name. Pointer fields (created with `tuitest.Ptr(v)`) distinguish omitted options from explicit zero or `false` values, and durations use `*time.Duration`.
 
-`ClientOptions` configures `Backend` (`Alacritty`, `Ghostty`, `Rio`, `XtermJS`), `Profile`, `Style` (`*RenderStyle`), `Timeouts`, `ScreenHistoryLimit`, `Recording` (`RecordingDisabled`, `RecordingOnFailure`, `RecordingAlways`), `Artifacts` (`ArtifactNone`, `ArtifactText`, `ArtifactHTML`, `ArtifactAll`), `Trace` (`TraceOff`, `TraceOnFailure`, `TraceOn`), and `Context` (`*ExecutionContext`). `SpawnOptions` (embedded by `OpenOptions` alongside `Shell`) accepts per-launch `Backend`, `Cols`, `Rows`, `Cwd`, `Env`, `WaitReady`, `Restart`, `Retries`, `Profile`, `Style`, `Timeouts`, `Recording`, `ScreenHistoryLimit`, and `Context`.
+`ClientOptions` configures `Backend` (`Alacritty`, `Ghostty`, `Rio`, `XtermJS`), `Profile`, `Style` (`*RenderStyle`), `Timeouts`, `ScreenHistoryLimit`, `Recording` (`*AutomaticRecording`), `Artifacts` (`*ArtifactOptions`), `Trace` (`*TraceOptions`), and `Context` (`*ExecutionContext`). `SpawnOptions` (embedded by `OpenOptions` alongside `Shell`) accepts per-launch `Backend`, `Cols`, `Rows`, `Cwd`, `Env`, `WaitReady`, `Restart`, `Retries`, `Profile`, `Style`, `Timeouts`, `Recording`, and `Context`.
 
 ## Client methods
 
