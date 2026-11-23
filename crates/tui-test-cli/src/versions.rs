@@ -11,7 +11,6 @@ pub fn render(json_output: bool) -> Result<String> {
         serde_json::from_str(include_str!("../../tui-test/assets/xtermjs/pinned.json"))
             .context("parse vendored xterm.js versions")?;
     let ghostty = ghostty_vt::build_info::version_string().context("read Ghostty build version")?;
-    let ghostty = std::str::from_utf8(ghostty).context("decode Ghostty build version")?;
     let mut report = json!({
         "tui_test": env!("CARGO_PKG_VERSION"),
         "terminal_emulators": {

@@ -197,13 +197,15 @@ pub(super) struct GhosttyCore {
 
 impl GhosttyCore {
     pub(super) fn new(cols: u16, rows: u16, profile: Profile, bells: BellTracker) -> Result<Self> {
-        let mut terminal = Terminal::new(cols.max(1), rows.max(1)).context("creating terminal")?;
+        let mut terminal = Terminal::new(ghostty_vt::terminal::Options {
+            cols: cols.max(1),
+            rows: rows.max(1),
+            max_scrollback: profile.scrollback,
+        })
+        .context("creating terminal")?;
         terminal
             .resize(cols.max(1), rows.max(1), 1, 1)
             .context("initializing terminal cell size")?;
-        terminal
-            .set_scrollback_max_lines(Some(profile.scrollback))
-            .context("setting scrollback limit")?;
 
         terminal
             .set_default_fg_color(Some(to_ghostty_rgb(profile.colors.foreground)))
