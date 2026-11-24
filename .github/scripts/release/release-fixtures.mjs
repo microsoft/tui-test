@@ -30,6 +30,14 @@ export function libraryFixture(target) {
   return data;
 }
 
+export function executableFixture(target) {
+  const data = libraryFixture(target);
+  if (target.includes("linux")) data.writeUInt16LE(2, 16);
+  else if (target.includes("apple")) data.writeUInt32LE(2, 12);
+  else data.writeUInt16LE(0x0002, 86);
+  return data;
+}
+
 export function createFixture(t) {
   fs.mkdirSync(path.join(root, "target"), { recursive: true });
   const directory = fs.mkdtempSync(path.join(root, "target/release-test-"));

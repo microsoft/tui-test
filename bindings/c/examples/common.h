@@ -7,12 +7,43 @@
 
 #include "tui_test.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <time.h>
+#endif
+
+#ifdef _WIN32
+static char *executable_path_utf8(void) {
+    wchar_t path[32768];
+    DWORD capacity = (DWORD)(sizeof(path) / sizeof(path[0]));
+    DWORD length = GetModuleFileNameW(NULL, path, capacity);
+    if (length == 0 || length >= capacity) {
+        fputs("Cannot read the executable path, or the path is too long.\n", stderr);
+        return NULL;
+    }
+    int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, -1,
+                                  NULL, 0, NULL, NULL);
+    if (size == 0) {
+        fputs("Cannot convert the executable path to UTF-8.\n", stderr);
+        return NULL;
+    }
+    char *utf8 = (char *)malloc((size_t)size);
+    if (utf8 == NULL) {
+        fputs("Cannot allocate the executable path.\n", stderr);
+        return NULL;
+    }
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, -1,
+                            utf8, size, NULL, NULL) == 0) {
+        fputs("Cannot convert the executable path to UTF-8.\n", stderr);
+        free(utf8);
+        return NULL;
+    }
+    return utf8;
+}
 #endif
 
 static TuiString string_view(const char *text) {
@@ -79,7 +110,16 @@ static int example_main(int argc, char **argv, int asynchronous) {
     options.wait_ready.present = true;
     options.wait_ready.value = false;
     options.recording_mode = string_view("disabled");
-    int ok = consume(tui_run(session, options, string_view(argv[0]), &child_arg, 1));
+#ifdef _WIN32
+    char *program = executable_path_utf8();
+    if (program == NULL) return 1;
+#else
+    const char *program = argv[0];
+#endif
+    int ok = consume(tui_run(session, options, string_view(program), &child_arg, 1));
+#ifdef _WIN32
+    free(program);
+#endif
     if (ok) {
         TuiQuery query = {string_view(
             "{\"nodes\":[{\"kind\":\"text\",\"text\":\"Hello from C SDK\","

@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import {
   directoryEntries, libraryName, readArchive, releaseMetadata, sha256,
-  validateLibrary, writeArchive,
+  validateExecutable, validateLibrary, writeArchive,
 } from "./package-native.mjs";
 
 export function sdkFilename(version, target, bundle = false) {
@@ -88,7 +88,7 @@ export async function bundleEntries(root, target, sdk, cli) {
     [...sdkEntries(root, target, library, entries.get("lib/tui_test_ffi.lib")).keys()].sort(),
   )) throw new Error("Unexpected SDK contents");
   const executable = `bin/tui-test${windows ? ".exe" : ""}`;
-  if (!cli.length) throw new Error("CLI executable is empty");
+  validateExecutable(cli, target);
   entries.set(executable, cli);
   return { entries: seal(entries, expected), executable };
 }

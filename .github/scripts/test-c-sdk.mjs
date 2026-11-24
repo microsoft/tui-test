@@ -51,7 +51,7 @@ try {
   if (fs.existsSync(cli)) run(cli, ["--version"]);
   const installed = path.join(scratch, "installed");
   run("cmake", ["--install", build, "--config", "Release", "--prefix", installed]);
-  const application = path.join(scratch, "relocated application");
+  const application = path.join(scratch, "relocated application caf\u00e9 \u6d4b\u8bd5");
   fs.renameSync(installed, application);
   fs.rmSync(sdk, { recursive: true, force: true });
   for (const example of ["basic", "async", "cpp"]) {

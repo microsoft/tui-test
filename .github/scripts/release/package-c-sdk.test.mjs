@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { archiveBytes, readArchive, sha256 } from "./package-native.mjs";
 import { bundleEntries, sdkEntries } from "./package-c-sdk.mjs";
-import { createFixture, libraryFixture, root, targets } from "./release-fixtures.mjs";
+import { createFixture, executableFixture, libraryFixture, root, targets } from "./release-fixtures.mjs";
 
 function fixture(t) {
   const f = createFixture(t);
@@ -55,7 +55,7 @@ test("combined archives preserve SDK files and make the CLI executable", async t
   const f = fixture(t);
   const target = "x86_64-unknown-linux-musl";
   const entries = sdkEntries(f.root, target, libraryFixture(target));
-  const cli = Buffer.from("CLI fixture");
+  const cli = executableFixture(target);
   const bundle = await bundleEntries(f.root, target, archiveBytes(entries), cli);
   for (const [name, data] of entries) {
     if (name !== "manifest.json") assert.deepEqual(bundle.entries.get(name), data);
@@ -65,11 +65,46 @@ test("combined archives preserve SDK files and make the CLI executable", async t
   assert.equal(JSON.parse(bundle.entries.get("manifest.json")).files["bin/tui-test"], sha256(cli));
 });
 
+test("bundle assembly requires the CLI platform and architecture to match the SDK", async t => {
+  const f = fixture(t);
+  for (const [target, wrongTarget] of [
+    ["aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
+    ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
+    ["aarch64-apple-darwin", "x86_64-apple-darwin"],
+    ["aarch64-pc-windows-msvc", "x86_64-pc-windows-msvc"],
+  ]) {
+    const sdk = archiveBytes(sdkEntries(f.root, target, libraryFixture(target),
+      target.includes("windows") ? importLibrary : undefined));
+    for (const cli of [executableFixture(wrongTarget), Buffer.alloc(0),
+      executableFixture(target).subarray(0, 10), Buffer.from("not an executable")]) {
+      await assert.rejects(bundleEntries(f.root, target, sdk, cli), /Executable format or architecture/);
+    }
+  }
+});
+
+test("bundle assembly accepts matching executables on every target, including Linux PIE", async t => {
+  const f = fixture(t);
+  for (const target of Object.keys(targets)) {
+    const sdk = archiveBytes(sdkEntries(f.root, target, libraryFixture(target),
+      target.includes("windows") ? importLibrary : undefined));
+    const cli = executableFixture(target);
+    const bundle = await bundleEntries(f.root, target, sdk, cli);
+    assert.deepEqual(bundle.entries.get(bundle.executable), cli);
+    if (target.includes("linux")) {
+      cli.writeUInt16LE(3, 16);
+      await bundleEntries(f.root, target, sdk, cli);
+    } else {
+      await assert.rejects(bundleEntries(f.root, target, sdk, libraryFixture(target)),
+        /Executable format or architecture/);
+    }
+  }
+});
+
 test("bundle assembly rejects corrupt SDK content and mismatched releases", async t => {
   const f = fixture(t);
   const target = "x86_64-unknown-linux-gnu";
   const entries = sdkEntries(f.root, target, libraryFixture(target));
-  const cli = Buffer.from("CLI fixture");
+  const cli = executableFixture(target);
   const altered = new Map(entries);
   altered.set("include/tui_test.h", Buffer.from("wrong header"));
   await assert.rejects(bundleEntries(f.root, target, archiveBytes(altered), cli), /checksum mismatch/);
