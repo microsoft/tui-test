@@ -1,0 +1,154 @@
+---
+title: JavaScript and TypeScript
+description: Complete API reference for @microsoft/tui-test and @microsoft/tui-test/test.
+editUrl: false
+---
+
+`@microsoft/tui-test` runs the `tui-test` terminal engine directly inside Node.js.
+
+## Install
+
+```sh
+npm install @microsoft/tui-test
+```
+
+Requires Node.js 20 or newer. The package is ESM only (`"type": "module"`). Keep optional dependencies enabled so npm installs the prebuilt native library for your OS and architecture (`win32-x64-msvc`, `win32-arm64-msvc`, `darwin-x64`, `darwin-arm64`, `linux-x64-gnu`, `linux-arm64-gnu`, `linux-x64-musl`, `linux-arm64-musl`). Bun and Deno 2 work on a best-effort basis; Deno 2 requires a local `node_modules` directory and `--allow-ffi`.
+
+To load a custom native build, set `TUI_TEST_NATIVE_LIBRARY` to its absolute path; see [`crates/tui-test-ffi/README.md`](https://github.com/microsoft/tui-test/blob/main/crates/tui-test-ffi/README.md#build-and-use).
+
+## Quick start
+
+```js
+import { TuiTest } from "@microsoft/tui-test";
+
+const terminal = TuiTest.ephemeral("quickstart");
+try {
+  await terminal.run(process.execPath, [
+    "-e",
+    "console.log('Ready'); setInterval(() => {}, 1000)",
+  ]);
+  await terminal.getByText("Ready").expect();
+  console.log(await terminal.text());
+} finally {
+  await terminal.closeQuiet();
+}
+```
+
+## `TuiTest` client
+
+```ts
+new TuiTest(session?: string, options?: ClientOptions)
+TuiTest.ephemeral(prefix?: string, options?: ClientOptions): TuiTest
+```
+
+| `ClientOptions` field | Type | Default |
+| --- | --- | --- |
+| `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs"` | `"alacritty"` |
+| `timeouts` | `Timeouts` | `{ text: 5000, idle: 5000, command: 30000, exit: 30000, ready: 30000 }` |
+| `profile` | `Profile` (`scrollback`, `colors`) | built-in profile (`scrollback: 10000`) |
+| `style` | `RenderStyle` | built-in window, font, padding, and cursor style |
+| `screenHistoryLimit` | `number` | `10` |
+| `recording` | `{ directory?: string, mode?: "disabled" \| "on-failure" \| "always" }` | `{ mode: "disabled" }` |
+| `artifacts` | `{ dir: string, onFailure?: "none" \| "text" \| "html" \| "all", includeRecording?: boolean }` | off |
+| `trace` | `{ mode?: "off" \| "on-failure" \| "on", directory?: string }` | `{ mode: "off", directory: ".tui-test/traces" }` |
+| `context` | `ExecutionContext` (`operationName`, `diagnosticContext`, `artifacts`, `trace`, `screenHistoryLimit`) | none |
+
+Client properties are `terminal.session` (`string`), `terminal.keyboard` (`Keyboard`), and `terminal.mouse` (`Mouse`). Explicit `trace` options take precedence over `recording.mode`.
+
+### Lifecycle and trace control
+
+| Method | Description |
+| --- | --- |
+| `open(options?)` | Open a shell (`shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, `style`, `timeouts`, `recording`, `screenHistoryLimit`, `context`). |
+| `run(program, args?, options?)` | Spawn an executable directly (same options as `open` except `shell`). |
+| `restart({ gracefulTimeout? })` | Replay the previous spawn (5000 ms default grace period). |
+| `interrupt()` | Cancel in-flight waits immediately and terminate the child process while retaining the session. |
+| `finishTrace(failed = false)` | Finalize the active trace outcome without closing the session. |
+| `close()` / `closeQuiet()` | Terminate the child and release the session (`closeQuiet` ignores errors). |
+| `[Symbol.asyncDispose]()` | Support `await using terminal = TuiTest.ephemeral()`. |
+
+Per-call `style`, `recording`, and `context` fields on `open` or `run` override constructor defaults for that launch without mutating `ClientOptions`.
+
+### Input, scrollback, and signals
+
+| Method | Description |
+| --- | --- |
+| `submit(text?)` | Type optional text and press Enter. |
+| `type(text)` / `write(data)` | Type printable text or write raw UTF-8/escape bytes without Enter. |
+| `press(...keys)` | Shorthand for `keyboard.press(...keys)`. |
+| `keyboard.press` / `down` / `repeat` / `up` | Send named keys and modifiers (`Ctrl+C`, `Alt+Enter`, `F1`..`F12`, arrows). |
+| `mouse.click` / `move` / `down` / `up` / `drag` / `scroll` | Send zero-based cell mouse actions (`button`, `alt`, `ctrl`, `shift`, `clicks`, `onText`, `amount`). |
+| `resize(cols, rows)` | Resize the PTY and emulator grid. |
+| `scroll(lines)` / `scrollToTop()` / `scrollToBottom()` | Navigate native scrollback (`lines > 0` moves into older output; `scrollToBottom()` returns to live). |
+| `signal(name)` / `kill()` | Send `"INT"`, `"TERM"`, `"KILL"`, or `"QUIT"`. |
+
+### State inspection
+
+| Method | Return type |
+| --- | --- |
+| `state()` | `Promise<State>` |
+| `text({ full? })` | `Promise<string>` |
+| `packedScreen({ full? })` | `Promise<{ utf8: Uint8Array, cols: number, rows: number }>` |
+| `cells(x, y, w?, h?)` | `Promise<Cell[]>` |
+| `getViewport()` / `getSize()` | `Promise<Viewport>` (`{ offset, history }`) / `Promise<Size>` |
+| `getCommand()` / `getOutput()` / `getExitCode()` / `getCwd()` | Tracked shell command metadata |
+| `getCursor()` / `getModes()` / `getColors()` | `Promise<Cursor>`, `Promise<Record<string, boolean>>`, `Promise<State["colors"]>` |
+| `getTitle()` / `getClipboard()` | `Promise<string \| null>` / `Promise<string>` |
+| `getBellCount()` / `getBellEvents()` | `Promise<number>` / `Promise<BellEvent[]>` |
+
+### Waits, assertions, snapshots, and captures
+
+| Method | Description |
+| --- | --- |
+| `waitReady(opts?)` / `waitCommand(opts?)` / `waitExit(opts?)` / `waitIdle(opts?)` | Lifecycle and quiet-screen waits (`{ timeout? }`). |
+| `waitTitle(text, { regex?, not?, timeout? })` | Wait for window title match or non-match. |
+| `waitClipboard(pattern?, { timeout? })` | Wait for next OSC 52 change or string/`RegExp` match. |
+| `waitBell({ timeout? })` / `expectBellCount(count, { timeout? })` | Wait for a bell or cumulative bell count. |
+| `expectTitle(text, opts?)` / `expectOutput(text, { regex? })` / `expectExitCode(code, opts?)` | Assert title, shell command output, or exit code. |
+| `expectCursor(options)` | Poll for `{ x?, y?, visible?, shape?, timeout? }`. |
+| `expectMode(mode, enabled, { timeout? })` | Poll for a boolean terminal mode. |
+| `expectColors({ foreground?, background?, cursor?, palette?, timeout? })` | Poll for terminal colors (`palette` uses `[index, color]` pairs). |
+| `expectSnapshot(name, { update?, includeStyle?, includeTitle?, cwd? })` | Compare or update a screen snapshot baseline. |
+| `screenshot(path?, { full?, zoom?, background?, transparent? })` | Return text or save `.svg` / `.png`. |
+| `startRecording(path, { format?, fps?, speed?, idleTimeLimit?, zoom?, background?, transparent? })` | Start `.gif`, `.apng`, `.mp4`, or `.cast` capture. |
+| `pauseRecording()` / `resumeRecording()` / `stopRecording()` | Pause, resume (raster only), or finalize an active recording. |
+
+## `Locator`
+
+```js
+const save = terminal
+  .getByText("Save", {
+    scope: {
+      after: { text: "Network", occurrence: "unique" },
+      before: { text: "Advanced", occurrence: { nth: 0 } },
+    },
+  })
+  .withStyle({ bold: true })
+  .relativeTo(terminal.getByText("Settings"), "after")
+  .or(terminal.getByLink("app://save"));
+
+await save.unique().click();
+```
+
+| Method | Description |
+| --- | --- |
+| `getByText(text, { regex?, full?, whitespace?, scope?, matchStyle?, direction? })` | Match text (`whitespace`: `"exact"` or `"normalize"`). |
+| `getByStyle(style, { full?, matchStyle?, direction? })` | Match styled cell runs or filter parent matches. |
+| `getByLink(uri, { full?, matchStyle?, direction? })` | Match OSC 8 link runs (`""` matches unlinked cells). |
+| `withStyle(style)` | Apply a whole-match style constraint to a leaf query. |
+| `relativeTo(parent, direction?)` | Scope `"within"` (default), `"after"`, or `"before"` another locator on the same client. |
+| `and(other)` / `or(other)` | Cell-set intersection or union into contiguous per-row runs. |
+| `filter({ has?, hasNot? })` | Keep candidate matches containing `has` and excluding `hasNot`. |
+| `any()` / `unique()` / `first()` / `last()` / `nth(index)` | Occurrence selection. |
+| `locations()` / `location()` / `count()` / `all()` | Immediate screen queries (`location()` requires one match). |
+| `wait({ state?, timeout? })` / `expect({ not?, timeout? })` | Retry for `"visible"` or `"hidden"` state. |
+| `click({ button?, alt?, ctrl?, shift?, clicks?, timeout? })` | Retry for one match and click its middle cell. |
+| `highlight({ timeout? })` / `highlightMatches({ timeout? })` | Highlight matches (`highlightMatches` also returns `TextMatch[]`). |
+
+## Module functions, test helpers, and errors
+
+Top-level exports from `@microsoft/tui-test` include `sessions()`, `closeAll()`, `getRecording(session?)`, `uniqueSession(prefix?)`, and `VERSION`.
+
+`@microsoft/tui-test/test` exports `withTerminal(options, fn)`, `createTerminal(options?)`, `closeAllTracked()`, `setTerminalDefaults(options)`, `resetTerminalDefaults()`, `trackTerminal(t)`, `untrackTerminal(t)`, `trackedCount()`, `terminalSnapshot(text)`, and `defaultShell`.
+
+Errors (`ExpectationError` = `1`, `UsageError` = `2`, `NoSessionError` = `3`, `InternalError` = `5`) extend `TuiTestError` and expose `kind`, `exitCode`, structured `details` (`FailureDetails`), and `artifact` (`FailureArtifactRef`). Canceling an awaited Promise does not cancel the underlying native call; use `interrupt()` and `closeQuiet()` during teardown.

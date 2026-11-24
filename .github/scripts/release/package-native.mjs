@@ -40,7 +40,7 @@ export function validateLibrary(data, target) {
     const offset = data.readUInt32LE(60);
     valid = data.length >= offset + 24 && data.subarray(0, 2).equals(Buffer.from("MZ"))
       && data.subarray(offset, offset + 4).equals(Buffer.from("PE\0\0"))
-      && data.readUInt16LE(offset + 4) === 0x8664 && (data.readUInt16LE(offset + 22) & 0x2000) !== 0;
+      && data.readUInt16LE(offset + 4) === (arm ? 0xaa64 : 0x8664) && (data.readUInt16LE(offset + 22) & 0x2000) !== 0;
   }
   if (!valid) throw new Error(`Library format or architecture does not match ${target}`);
 }
@@ -118,7 +118,7 @@ export async function nativeArchives(root, artifacts, selected) {
   }
   const expected = selected.map(target => nativeFilename(version, target)).sort();
   if (all && !isDeepStrictEqual(fs.readdirSync(artifacts).filter(name => name.endsWith(".tar.gz")).sort(), expected)) {
-    throw new Error("Expected exactly the seven configured native archives for this release");
+    throw new Error("Expected exactly the eight configured native archives for this release");
   }
   const archives = new Map();
   for (const target of selected) {
