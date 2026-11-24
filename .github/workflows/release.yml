@@ -88,7 +88,9 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
+            os: windows-2022
+          - target: aarch64-pc-windows-msvc
+            os: windows-2022
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -105,12 +107,16 @@ jobs:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
 
+      - name: Patch Zig 0.16 stdlib alignment for Windows ARM64
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: node .github/scripts/release/patch-zig-windows-arm64.mjs
+
       - if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         if: contains(matrix.target, 'musl')
         with:
           tool: cargo-zigbuild
@@ -156,11 +162,11 @@ jobs:
             args: --target aarch64-unknown-linux-gnu -x
             zigbuild: true
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-24.04
             args: --target x86_64-unknown-linux-musl -x
             zigbuild: true
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-24.04
             args: --target aarch64-unknown-linux-musl -x
             zigbuild: true
           - target: x86_64-apple-darwin
@@ -170,8 +176,11 @@ jobs:
             os: macos-latest
             args: --target aarch64-apple-darwin
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
+            os: windows-2022
             args: --target x86_64-pc-windows-msvc
+          - target: aarch64-pc-windows-msvc
+            os: windows-2022
+            args: --target aarch64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -196,7 +205,11 @@ jobs:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
 
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - name: Patch Zig 0.16 stdlib alignment for Windows ARM64
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: node .github/scripts/release/patch-zig-windows-arm64.mjs
+
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         if: matrix.zigbuild && !endsWith(matrix.target, '-gnu')
         with:
           tool: cargo-zigbuild
@@ -364,13 +377,13 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04
             wheel: cp311-manylinux_x86_64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
             wheel: cp311-manylinux_aarch64
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-24.04
             wheel: cp311-musllinux_x86_64
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
@@ -384,8 +397,11 @@ jobs:
             wheel: cp311-macosx_arm64
             deployment-target: "11.0"
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
+            os: windows-2022
             wheel: cp311-win_amd64
+          - target: aarch64-pc-windows-msvc
+            os: windows-2022
+            wheel: cp311-win_arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -410,6 +426,10 @@ jobs:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
 
+      - name: Patch Zig 0.16 stdlib alignment for Windows ARM64
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: node .github/scripts/release/patch-zig-windows-arm64.mjs
+
       - name: Build Python wheel
         uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e # v4.3.5
         with:
@@ -427,6 +447,7 @@ jobs:
           CIBW_MUSLLINUX_X86_64_IMAGE: musllinux_1_2
           CIBW_MUSLLINUX_AARCH64_IMAGE: musllinux_1_2
           CIBW_TEST_COMMAND: python {project}/bindings/python/examples/shared_library.py
+          CIBW_TEST_SKIP: "*-win_arm64"
 
       - name: Build Python sdist
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -512,6 +533,7 @@ jobs:
             tui-test-linux-arm64-musl
             tui-test-linux-x64-gnu
             tui-test-linux-x64-musl
+            tui-test-win32-arm64-msvc
             tui-test-win32-x64-msvc
             tui-test
           )

@@ -1,0 +1,191 @@
+---
+title: Recordings
+description: Record live terminal sessions as GIF, APNG, MP4, or asciinema files with pause/resume control and custom styling.
+editUrl: false
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`tui-test` records live terminal sessions into animated raster media (`.gif`, `.apng`/`.png`, `.mp4`) or timestamped asciinema streams (`.cast`). For scripted demos written in a declarative VHS-like syntax, see [tape files](/docs/capture/tapes/).
+
+## Formats and requirements
+
+| Extension | Format | Requirements |
+| --- | --- | --- |
+| `.gif` | Animated GIF | Built in on CLI, JS, Python, and Go; `recording-raster` + fonts in Rust. |
+| `.png`, `.apng` | Animated PNG | Built in on CLI, JS, Python, and Go; `recording-raster` + fonts in Rust. |
+| `.mp4` | H.264 MP4 video | Same raster support plus `ffmpeg` on `PATH` (no transparent background). |
+| `.cast` | Asciinema v2 stream | No font or raster dependencies; replay in any asciinema player. |
+
+The output path extension chooses the format unless overridden by `format` (`--format`).
+
+## Start, pause, resume, and stop
+
+Raster recordings sample the live terminal at `fps` (default `30`) and preserve real elapsed time until `stopRecording` finishes writing the file. Use `pauseRecording` and `resumeRecording` to skip slow setup steps in `.gif`, `.apng`, or `.mp4` captures while the child process keeps running; asciinema `.cast` streams reject pause and resume.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    ```js
+    const terminal = TuiTest.ephemeral("demo", {
+      style: {
+        fontSize: 20,
+        window: { titleBar: false },
+        cursor: { blink: true, blinkIntervalMs: 400 },
+      },
+    });
+    try {
+      await terminal.run("my-app");
+      await terminal.getByText("Ready").expect();
+      await terminal.startRecording("demo.gif", {
+        fps: 30,
+        idleTimeLimit: 1.5,
+        speed: 1.25,
+      });
+      await terminal.getByText("Deploy").click();
+      await terminal.pauseRecording();
+      await terminal.getByText("Provisioning complete").expect();
+      await terminal.resumeRecording();
+      await terminal.getByText("Healthy").expect();
+      await terminal.stopRecording();
+    } finally {
+      await terminal.closeQuiet();
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    from tui_test import RecordingCursorStyle, RenderStyle, TuiTest, WindowStyle
+
+    style = RenderStyle(
+        font_size=20,
+        window=WindowStyle(title_bar=False),
+        cursor=RecordingCursorStyle(blink=True, blink_interval_ms=400),
+    )
+    async with TuiTest.ephemeral("demo", style=style) as terminal:
+        await terminal.run("my-app")
+        await terminal.get_by_text("Ready").expect()
+        await terminal.start_recording(
+            "demo.gif",
+            fps=30,
+            idle_time_limit=1.5,
+            speed=1.25,
+        )
+        await terminal.get_by_text("Deploy").click()
+        await terminal.pause_recording()
+        await terminal.get_by_text("Provisioning complete").expect()
+        await terminal.resume_recording()
+        await terminal.get_by_text("Healthy").expect()
+        await terminal.stop_recording()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    use tui_test::{Backend, Operation, RunOptions, Session};
+
+    let terminal = Session::new("demo");
+    let mut style = tui_test::render::style::Style::default();
+    style.font_size = 20.0;
+    style.window.title_bar = false;
+    terminal.run(RunOptions {
+        program: "my-app".into(),
+        args: vec![],
+        backend: Backend::Alacritty,
+        profile: Default::default(),
+        cols: 80,
+        rows: 30,
+        cwd: None,
+        env: vec![],
+        wait_ready: None,
+        restart: false,
+        timeouts: Default::default(),
+        recording: Default::default(),
+        style,
+    })?;
+    terminal.get_by_text("Ready").expect()?;
+    terminal.execute(Operation::StartRecording {
+        path: "demo.gif".into(),
+        format: None,
+        fps: Some(30),
+        speed: Some(1.25),
+        idle_time_limit: Some(1.5),
+        zoom: None,
+        background: None,
+    })?;
+    terminal.get_by_text("Deploy").click()?;
+    terminal.execute(Operation::PauseRecording)?;
+    terminal.get_by_text("Provisioning complete").expect()?;
+    terminal.execute(Operation::ResumeRecording)?;
+    terminal.get_by_text("Healthy").expect()?;
+    terminal.execute(Operation::StopRecording)?;
+    terminal.close()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    ```go
+    style := &tuitest.RenderStyle{
+        FontSize: tuitest.Ptr(20.0),
+        Window:   tuitest.WindowStyle{TitleBar: tuitest.Ptr(false)},
+    }
+    terminal, err := tuitest.Ephemeral("demo", tuitest.ClientOptions{Style: style})
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer terminal.CloseQuiet()
+
+    if _, err := terminal.Run("my-app", nil, tuitest.SpawnOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    err = terminal.StartRecording("demo.gif", tuitest.RecordingOptions{
+        FPS:           tuitest.Ptr(uint32(30)),
+        IdleTimeLimit: tuitest.Ptr(1.5),
+        Speed:         tuitest.Ptr(1.25),
+    })
+    if err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Deploy", tuitest.TextSelectorOptions{}).Click(tuitest.LocatorClickOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.PauseRecording(); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Provisioning complete", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.ResumeRecording(); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Healthy", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if _, err := terminal.StopRecording(); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+    ```sh
+    tui-test --session demo run my-app
+    tui-test --session demo expect text "Ready"
+    tui-test --session demo record start demo.gif --fps 30 --idle-time-limit 1.5 --speed 1.25
+    tui-test --session demo click text "Deploy"
+    tui-test --session demo record pause
+    tui-test --session demo expect text "Provisioning complete"
+    tui-test --session demo record resume
+    tui-test --session demo expect text "Healthy"
+    tui-test --session demo record stop
+    tui-test --session demo close
+    ```
+  </TabItem>
+</Tabs>
+
+## Timing, cursor blink, and automatic casts
+
+`idleTimeLimit` (`--idle-time-limit SECONDS`) caps unchanged intervals before `speed` (`--speed`) scales frame durations. By default there is no idle cap and no extra hold after `stop`.
+
+Cursor animation requires both `style.cursor.blink = true` (default) and an application cursor shape that requests blinking. Each visible or hidden phase lasts `blinkIntervalMs` (default `500` ms) before speed scaling.
+
+Automatic asciinema recordings are controlled separately from explicit `startRecording` calls via `[trace]` or `recording: { mode: "disabled" | "on-failure" | "always", directory }`. Retrieve an active or retained automatic cast with `tui-test get-recording`, `getRecording(session)`, `get_recording(session)`, `Recording(session)`, or `session.recording()`. Automatic casts remain continuous even while a raster recording is paused. Recorded files can contain terminal text, environment output, and window titles; review captures before publishing or attaching them to public issues.

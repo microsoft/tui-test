@@ -1,0 +1,100 @@
+---
+title: Screenshots
+description: Export terminal screens as SVG or PNG images with custom window styling, locator highlights, zoom, and scrollback.
+editUrl: false
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`screenshot` captures the current terminal viewport as an SVG vector image, a PNG raster image, or plain text (when no output file path is supplied).
+
+## Save SVG and PNG screenshots
+
+The file extension selects `.svg` or `.png` output. Highlighted locators remain visible in the rendered image, which makes screenshots useful both for documentation and for visual test verification.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    ```js
+    await terminal.getByText("Save").highlight();
+    await terminal.screenshot("screen.svg");
+    await terminal.screenshot("screen.png", {
+      full: true,
+      zoom: 2,
+      transparent: true,
+    });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    await terminal.get_by_text("Save").highlight()
+    await terminal.screenshot("screen.svg")
+    await terminal.screenshot(
+        "screen.png",
+        full=True,
+        zoom=2,
+        transparent=True,
+    )
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    use tui_test::render::style::BackgroundFill;
+    use tui_test::Operation;
+
+    terminal.get_by_text("Save").highlight()?;
+    terminal.execute(Operation::Screenshot {
+        full: false,
+        path: Some("screen.svg".into()),
+        zoom: None,
+        background: None,
+    })?;
+    terminal.execute(Operation::Screenshot {
+        full: true,
+        path: Some("screen.png".into()),
+        zoom: Some(2.0),
+        background: Some(BackgroundFill::Transparent),
+    })?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    ```go
+    if err := terminal.GetByText("Save", tuitest.TextSelectorOptions{}).Highlight(tuitest.WaitOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if _, err := terminal.Screenshot("screen.svg", tuitest.ScreenshotOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    _, err := terminal.Screenshot("screen.png", tuitest.ScreenshotOptions{
+        Full:        true,
+        Zoom:        tuitest.Ptr(2.0),
+        Transparent: true,
+    })
+    if err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+    ```sh
+    tui-test highlight text "Save"
+    tui-test screenshot -o screen.svg
+    tui-test screenshot -o screen.png --full --zoom 2 --transparent
+    ```
+  </TabItem>
+</Tabs>
+
+## Capture options
+
+| Option | CLI flag | Behavior |
+| --- | --- | --- |
+| Output path | `PATH` or `-o PATH` | Selects `.svg` or `.png`. Omitting the path returns plain text without writing a file. |
+| Full scrollback | `--full` | Renders all retained scrollback rows plus the live screen instead of only the active viewport. |
+| Zoom scale | `--zoom N` | Multiplies output dimensions by `N` (requires an output path). |
+| Canvas background | `--background COLOR` | Overrides the outer canvas color around the terminal window (mutually exclusive with `--transparent`). |
+| Transparent canvas | `--transparent` | Makes the outer canvas transparent while keeping the terminal background intact. |
+
+In Rust, PNG output requires the `recording-raster` Cargo feature (or one of the `recording-font-jetbrains-mono*` features to bundle fonts instead of relying on system fonts). Prebuilt CLI binaries and Go, Python, and JavaScript packages include PNG raster rendering and bundled fonts out of the box.
+
+## Customize window chrome and fonts
+
+Fonts, terminal padding, window title bars, traffic-light buttons, borders, and drop shadows come from the session's render style (`[recording.style]` in `tui-test.toml`, or `style` in JavaScript, Python, Go, and Rust launch options). Screenshots always draw an otherwise-visible cursor in its visible phase so captures remain deterministic even when cursor blinking is enabled. See [configuration](/docs/reference/configuration/#recording-style) for all style fields.

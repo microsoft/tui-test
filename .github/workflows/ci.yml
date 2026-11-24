@@ -16,9 +16,9 @@ jobs:
         include:
           - os: macos-latest
             bin: target/debug/tui-test
-          - os: windows-latest
+          - os: windows-2022
             bin: target/debug/tui-test.exe
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             bin: target/debug/tui-test
     runs-on: ${{ matrix.os }}
     env:
@@ -127,7 +127,7 @@ jobs:
           CGO_ENABLED=0 go test ./...
           CGO_ENABLED=1 go test -race ./...
 
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         if: runner.os == 'Linux'
         with:
           tool: cargo-zigbuild
@@ -222,7 +222,7 @@ jobs:
 
   compatibility:
     name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:

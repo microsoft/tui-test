@@ -1,0 +1,302 @@
+---
+title: Locators
+description: Find, scope, compose, assert, and click terminal content by text, style, or OSC 8 hyperlink.
+editUrl: false
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+A locator describes how to find content on the terminal grid rather than storing a fixed coordinate. Every read, wait, or click re-evaluates the locator against the latest screen snapshot, so animations and layout shifts do not leave stale cell positions behind.
+
+## Match text, regexes, and whitespace
+
+By default, `getByText` matches exact substrings on the visible viewport. Enable `regex` for pattern matching, `whitespace: "normalize"` to collapse runs of horizontal whitespace, or `full: true` to search retained scrollback alongside the live screen.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    ```js
+    await terminal.getByText("Save").expect();
+    await terminal.getByText("item \\d+", { regex: true }).expect();
+    await terminal
+      .getByText("Name Value", { whitespace: "normalize" })
+      .expect();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    await terminal.get_by_text("Save").expect()
+    await terminal.get_by_text(r"item \d+", regex=True).expect()
+    await terminal.get_by_text("Name Value", whitespace="normalize").expect()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    use tui_test::{TextSelector, WhitespaceMode};
+
+    terminal.get_by_text("Save").expect()?;
+    terminal
+        .get_by_text(TextSelector {
+            text: r"item \d+".into(),
+            regex: true,
+            ..Default::default()
+        })
+        .expect()?;
+    terminal
+        .get_by_text(TextSelector {
+            text: "Name Value".into(),
+            whitespace: WhitespaceMode::Normalize,
+            ..Default::default()
+        })
+        .expect()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    ```go
+    if err := terminal.GetByText("Save", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText(`item \d+`, tuitest.TextSelectorOptions{Regex: true}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByText("Name Value", tuitest.TextSelectorOptions{Whitespace: tuitest.Normalize}).Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+    ```sh
+    tui-test expect text "Save"
+    tui-test expect text 'item \d+' --regex
+    tui-test expect text "Name Value" --whitespace normalize
+    ```
+  </TabItem>
+</Tabs>
+
+## Filter by style and OSC 8 hyperlinks
+
+Cells carry foreground and background colors, underline style and color, boolean SGR attributes (`bold`, `dim`, `italic`, `inverse`, `hidden`, `strikethrough`, `blink`), and OSC 8 hyperlink targets.
+
+Root selectors (`terminal.getByStyle(...)` and `terminal.getByLink(uri)`) find contiguous matching cell runs within each row. Whole-match style filters (`locator.withStyle(...)`, chained `locator.getByStyle(...)` with the default `"within"` direction, or CLI `--fg` and `--bold`) require every non-blank cell of a candidate match to satisfy the style. Hyperlink constraints (`getByLink(uri)` or CLI `--link URI`) check the OSC 8 target across every cell in the match, including spaces; pass `""` to require unlinked cells.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    ```js
+    await terminal
+      .getByText("Deployed")
+      .withStyle({ foreground: "green", bold: true })
+      .expect();
+    await terminal.getByLink("https://tui-test.dev/docs/install/").click();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    from tui_test import TextStyle
+
+    await (
+        terminal.get_by_text("Deployed")
+        .with_style(TextStyle(foreground="green", bold=True))
+        .expect()
+    )
+    await terminal.get_by_link("https://tui-test.dev/docs/install/").click()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    use tui_test::TextStyle;
+
+    terminal
+        .get_by_text("Deployed")
+        .get_by_style(TextStyle {
+            foreground: Some("green".into()),
+            bold: Some(true),
+            ..Default::default()
+        })
+        .expect()?;
+    terminal
+        .get_by_link("https://tui-test.dev/docs/install/")
+        .click()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    ```go
+    err := terminal.GetByText("Deployed", tuitest.TextSelectorOptions{}).
+        WithStyle(tuitest.TextStyle{
+            Foreground: tuitest.Ptr("green"),
+            Bold:       tuitest.Ptr(true),
+        }).
+        Expect(tuitest.LocatorExpectOptions{})
+    if err != nil {
+        t.Fatal(err)
+    }
+    if err := terminal.GetByLink("https://tui-test.dev/docs/install/", tuitest.LinkSelectorOptions{}).Click(tuitest.LocatorClickOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+    ```sh
+    tui-test expect text "Deployed" --fg green --bold
+    tui-test click text "Install" --link "https://tui-test.dev/docs/install/"
+    ```
+  </TabItem>
+</Tabs>
+
+## Scope by anchors or relative locators
+
+When a screen repeats the same label in multiple panels, narrow the search region instead of hard-coding an index. Relative locators search `"within"` (default), `"after"`, or `"before"` a parent locator (`parent.getByText("Save", { direction: "after" })` or `child.relativeTo(parent, "after")`). Text scope anchors bound a text selector between `after` and `before` text anchors, each supporting `regex` and `occurrence` (`"unique"` by default, `"any"`, `"first"`, `"last"`, or zero-based `nth`).
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    ```js
+    const save = terminal.getByText("Save", {
+      scope: {
+        after: { text: "Network", occurrence: "unique" },
+        before: { text: "Advanced" },
+      },
+    });
+    await save.unique().click();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    from tui_test import TextAnchor, TextScope
+
+    save = terminal.get_by_text(
+        "Save",
+        scope=TextScope(after=TextAnchor("Network"), before=TextAnchor("Advanced")),
+    )
+    await save.unique().click()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    use tui_test::{TextAnchor, TextScope, TextSelector};
+
+    let save = terminal.get_by_text(TextSelector {
+        text: "Save".into(),
+        scope: TextScope {
+            after: Some(TextAnchor::new("Network")),
+            before: Some(TextAnchor::new("Advanced")),
+        },
+        ..Default::default()
+    });
+    save.unique().click()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    ```go
+    save := terminal.GetByText("Save", tuitest.TextSelectorOptions{
+        Scope: &tuitest.TextScope{
+            After:  &tuitest.TextAnchor{Text: "Network"},
+            Before: &tuitest.TextAnchor{Text: "Advanced"},
+        },
+    })
+    if err := save.Unique().Click(tuitest.LocatorClickOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+    ```sh
+    tui-test click text "Save" --after-text "Network" --before-text "Advanced" --match unique
+    ```
+  </TabItem>
+</Tabs>
+
+## Compose and filter locators
+
+Combine locators from the same session to express intersections, unions, and containment:
+
+- `and` (`and_` in Python) keeps cells matched by both operands and merges adjacent cells on each row into contiguous runs.
+- `or` (`or_` in Python) combines matched cells from either operand into contiguous per-row runs without duplicates.
+- `filter({ has, hasNot })` (`has` / `has_not` in Python) keeps whole candidate matches from the receiver that contain `has` and do not contain `hasNot`.
+
+Apply `scope`, `relativeTo`, and whole-match `withStyle` to leaf selectors before combining them with `and`, `or`, or `filter`. Selection order matters: `a.first().and(b)` intersects only `a`'s first match with `b`, whereas `a.and(b).first()` takes the first run of their intersection.
+
+<Tabs syncKey="example-language">
+  <TabItem label="JavaScript">
+    ```js
+    const link = terminal.getByLink("https://example.com");
+    const bold = terminal.getByStyle({ bold: true });
+    const boldLinkRuns = bold.and(link);
+    const rowWithLink = terminal.getByText("Docs", { regex: false }).filter({ has: link });
+    await boldLinkRuns.first().expect();
+    await rowWithLink.expect();
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    from tui_test import TextStyle
+
+    link = terminal.get_by_link("https://example.com")
+    bold = terminal.get_by_style(TextStyle(bold=True))
+    bold_link_runs = bold.and_(link)
+    row_with_link = terminal.get_by_text("Docs").filter(has=link)
+    await bold_link_runs.first().expect()
+    await row_with_link.expect()
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    use tui_test::{LocatorFilterOptions, TextStyle};
+
+    let link = terminal.get_by_link("https://example.com");
+    let bold = terminal.get_by_style(TextStyle {
+        bold: Some(true),
+        ..Default::default()
+    });
+    let bold_link_runs = bold.and(&link)?;
+    let row_with_link = terminal.get_by_text("Docs").filter(LocatorFilterOptions {
+        has: Some(link),
+        has_not: None,
+    })?;
+    bold_link_runs.first().expect()?;
+    row_with_link.expect()?;
+    ```
+  </TabItem>
+  <TabItem label="Go">
+    ```go
+    link := terminal.GetByLink("https://example.com", tuitest.LinkSelectorOptions{})
+    bold := terminal.GetByStyle(tuitest.TextStyle{Bold: tuitest.Ptr(true)}, tuitest.StyleSelectorOptions{})
+    boldLinkRuns, err := bold.And(link)
+    if err != nil {
+        t.Fatal(err)
+    }
+    rowWithLink, err := terminal.GetByText("Docs", tuitest.TextSelectorOptions{}).
+        Filter(tuitest.LocatorFilterOptions{Has: link})
+    if err != nil {
+        t.Fatal(err)
+    }
+    if err := boldLinkRuns.First().Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    if err := rowWithLink.Expect(tuitest.LocatorExpectOptions{}); err != nil {
+        t.Fatal(err)
+    }
+    ```
+  </TabItem>
+  <TabItem label="CLI">
+    ```sh
+    tui-test expect query --query '{
+      "selector": {
+        "kind": "and",
+        "selector": {
+          "left": {"selector": {"kind": "style", "selector": {"style": {"bold": true}}}},
+          "right": {"selector": {"kind": "link", "selector": {"uri": "https://example.com"}}}
+        }
+      },
+      "occurrence": "first"
+    }'
+    ```
+  </TabItem>
+</Tabs>
+
+On the CLI, `find|resolve|wait|expect|click|highlight query` accepts `--query JSON` or `--query-file PATH` using the full nested `LocatorQuery` schema; see the [CLI reference](/docs/reference/cli/#nested-locator-queries).
+
+## Select occurrences, inspect spans, and act
+
+Narrow multiple matches with `unique()`, `first()`, `last()`, `nth(index)` (zero-based), or `any()`.
+
+`locations()` (`find` on the CLI) returns all selected `TextMatch` spans without waiting, `count()` returns their count, and `all()` returns a locator per current match. `location()` (`resolve` on the CLI) requires a single resolved match.
+
+`expect()` and `wait()` retry until the locator matches, or until it disappears when `not: true` / `state: "hidden"` is set. `click()` retries for a single match on the live viewport and clicks its middle cell. `highlight()` and `highlightMatches()` outline matches in screenshots and the [live monitor](/docs/capture/monitor/).
