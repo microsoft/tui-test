@@ -1152,7 +1152,19 @@ fn recording_supports_explicit_and_automatic_cast_versions() {
             ),
         )
         .unwrap();
-        sandbox.ok(&["open", "--config", config.to_str().unwrap()]);
+        sandbox.ok(&[
+            "open",
+            "--config",
+            config.to_str().unwrap(),
+            "--env",
+            "TERM=ignored",
+            "--env",
+            if cfg!(windows) {
+                "term=vt100"
+            } else {
+                "TERM=vt100"
+            },
+        ]);
         let path = sandbox.home.join("explicit.cast");
         sandbox.ok(&[
             "record",
@@ -1171,6 +1183,12 @@ fn recording_supports_explicit_and_automatic_cast_versions() {
             let header: serde_json::Value =
                 serde_json::from_str(content.lines().next().unwrap()).unwrap();
             assert_eq!(header["version"], version);
+            let term = if version == 3 {
+                &header["term"]["type"]
+            } else {
+                &header["env"]["TERM"]
+            };
+            assert_eq!(term, "vt100");
             assert!(content.contains("cast-version-marker"));
         }
     }

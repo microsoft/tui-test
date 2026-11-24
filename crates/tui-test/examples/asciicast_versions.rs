@@ -9,7 +9,7 @@ use tui_test::{
 
 fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("--child") {
-        println!("READY");
+        println!("READY TERM={}", std::env::var("TERM")?);
         io::stdout().flush()?;
         for line in io::stdin().lock().lines() {
             line?;
@@ -38,7 +38,7 @@ fn main() -> anyhow::Result<()> {
             profile: defaults.profile,
             style: defaults.style,
             cwd: None,
-            env: vec![],
+            env: vec![("TERM".into(), "vt100".into())],
             wait_ready: Some(false),
             restart: false,
             timeouts: defaults.timeouts,
@@ -50,7 +50,7 @@ fn main() -> anyhow::Result<()> {
         })?;
         let result = (|| -> anyhow::Result<()> {
             session
-                .get_by_text("READY")
+                .get_by_text("READY TERM=vt100")
                 .wait_with_timeout(Some(5_000))?;
             session.execute(Operation::StartRecording {
                 path: path.to_string_lossy().into_owned(),
@@ -75,11 +75,17 @@ fn main() -> anyhow::Result<()> {
                 let header: serde_json::Value =
                     serde_json::from_str(content.lines().next().unwrap())?;
                 ensure!(header["version"] == version, "incorrect {kind} format");
+                let term = if version == 3 {
+                    &header["term"]["type"]
+                } else {
+                    &header["env"]["TERM"]
+                };
+                ensure!(term == "vt100", "incorrect {kind} TERM: {term}");
                 ensure!(
                     content.contains("UPDATED"),
                     "missing {kind} terminal output"
                 );
-                println!("{name} {kind}: version {version}, captured UPDATED");
+                println!("{name} {kind}: version {version}, TERM=vt100, captured UPDATED");
             }
             println!("Saved {}", path.display());
             Ok(())

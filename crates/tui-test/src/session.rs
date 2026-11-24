@@ -103,6 +103,7 @@ pub struct Session {
     pub cancelled: Arc<AtomicBool>,
     pub(crate) bells: BellTracker,
     recorder: Recorder,
+    recording_env: Vec<(String, String)>,
     #[cfg(feature = "recording-raster")]
     recording_sampler: Mutex<Option<RecordingSampler>>,
     logger: Arc<Logger>,
@@ -237,7 +238,10 @@ impl Session {
         let _ = try_capture_visual_state(&mut initial_state, true);
         let state = Arc::new(Mutex::new(initial_state));
 
-        let mut rec_env = vec![("TERM".to_string(), "xterm-256color".to_string())];
+        let mut rec_env = vec![(
+            "TERM".to_string(),
+            crate::terminal::pty::term_for_env(&env).to_string(),
+        )];
         if let Some(sh) = shell {
             rec_env.push(("SHELL".to_string(), sh.as_str().to_string()));
         }
@@ -395,6 +399,7 @@ impl Session {
             cancelled,
             bells,
             recorder,
+            recording_env: rec_env,
             #[cfg(feature = "recording-raster")]
             recording_sampler: Mutex::new(None),
             logger,
@@ -536,10 +541,6 @@ impl Session {
         } else {
             record::sidecar_path(&target_path)
         };
-        let mut env = vec![("TERM".to_string(), "xterm-256color".to_string())];
-        if let Some(shell) = self.shell {
-            env.push(("SHELL".to_string(), shell.as_str().to_string()));
-        }
         #[cfg(feature = "recording-raster")]
         let mut sampler = self
             .recording_sampler
@@ -560,7 +561,7 @@ impl Session {
             format,
             cols,
             rows,
-            env,
+            env: self.recording_env.clone(),
             initial_output,
             #[cfg(feature = "recording-raster")]
             zoom,

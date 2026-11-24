@@ -48,7 +48,7 @@ TuiTest.ephemeral(prefix?: string, options?: ClientOptions): TuiTest
 | `profile` | `Profile` (`scrollback`, `colors`) | built-in profile (`scrollback: 10000`) |
 | `style` | `RenderStyle` | built-in window, font, padding, and cursor style |
 | `screenHistoryLimit` | `number` | `10` |
-| `recording` | `{ directory?: string, mode?: "disabled" \| "on-failure" \| "always" }` | `{ mode: "disabled" }` |
+| `recording` | `{ directory?: string, mode?: "disabled" \| "on-failure" \| "always", format?: "cast" \| "cast3" }` | `{ mode: "disabled", format: "cast" }` |
 | `artifacts` | `{ dir: string, onFailure?: "none" \| "text" \| "html" \| "all", includeRecording?: boolean }` | off |
 | `trace` | `{ mode?: "off" \| "on-failure" \| "on", directory?: string }` | `{ mode: "off", directory: ".tui-test/traces" }` |
 | `context` | `ExecutionContext` (`operationName`, `diagnosticContext`, `artifacts`, `trace`, `screenHistoryLimit`) | none |

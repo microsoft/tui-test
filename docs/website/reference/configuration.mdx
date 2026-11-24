@@ -23,6 +23,7 @@ Relative paths inside `tui-test.toml` (such as `recording.directory`, `trace.dir
 ```toml
 [recording]
 directory = "./artifacts/casts"
+format = "cast3"
 
 [recording.style]
 font_size = 17
@@ -118,6 +119,7 @@ spread = 7
 ## Traces, diagnostics, and environment variables
 
 - `[recording] directory` sets where automatic `.cast` files are staged. TOML configuration does not accept `recording.mode`; CLI retention follows `[trace] mode` (`"off"`, `"on-failure"`, `"on"`, default directory `.tui-test/traces`). Language APIs additionally accept `recording.mode` (`"disabled"`, `"on-failure"`, `"always"`).
+- `[recording] format` selects `"cast"` (v2, the default) or `"cast3"` (v3). Profiles inherit this field unless overridden. Selecting a format does not enable capture.
 - `[diagnostics] screen-history-limit` (default `10`, max `50`, overridden by `--screen-history-limit`) controls how many recent distinct screens are kept for failure timelines.
 
 | Environment variable | Purpose |
