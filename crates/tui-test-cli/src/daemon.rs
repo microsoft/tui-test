@@ -140,11 +140,14 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
     host.stopping.store(true, Ordering::Release);
     drop(operations);
     let response = shutdown_engine(Arc::clone(&host));
+    // A client may read the retained cast as soon as it receives the close reply.
+    // Retire the endpoint first so that read doesn't try to flush a stopped daemon.
+    cleanup(&session_name);
+    drop(listener);
     if let Some(mut conn) = closing_client {
         let _ = ipc::write_response(&mut conn, &response);
         ipc::drain_peer(conn, Duration::from_millis(config::SHUTDOWN_DRAIN_MS));
     }
-    cleanup(&session_name);
     listener_error.map_or(Ok(()), |error| Err(error.into()))
 }
 

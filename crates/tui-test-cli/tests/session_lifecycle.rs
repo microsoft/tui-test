@@ -796,9 +796,7 @@ impl Drop for Sandbox {
     }
 }
 
-/// Connect to the session socket and send one request line, leaving the stream
-/// open for whatever the request streams next.
-fn monitor_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socket::Stream {
+fn request_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socket::Stream {
     let raw = cli_config::socket_name_in(&sandbox.home, &sandbox.session);
     let name = if cfg!(windows) {
         raw.to_ns_name::<GenericNamespaced>()
@@ -808,10 +806,13 @@ fn monitor_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socke
     .expect("valid session socket name");
     let mut stream =
         interprocess::local_socket::Stream::connect(name).expect("connect session socket");
+    stream.write_all(request.as_bytes()).expect("send request");
+    stream.flush().expect("flush request");
     stream
-        .write_all(request.as_bytes())
-        .expect("send monitor request");
-    stream.flush().expect("flush monitor request");
+}
+
+fn monitor_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socket::Stream {
+    let mut stream = request_stream(sandbox, request);
     if request.contains("\"monitor_input_stream\"") {
         let mut response = String::new();
         std::io::BufReader::new(&mut stream)
@@ -997,6 +998,28 @@ fn close_always_reports_success() {
             String::from_utf8_lossy(&out.stderr),
         );
     }
+}
+
+#[test]
+fn close_acknowledges_after_the_cast_is_available_offline() {
+    let sandbox = Sandbox::new("close-cast");
+    sandbox.ok(&["open", "--no-wait-ready", "--recording-mode", "always"]);
+    let mut closing = request_stream(&sandbox, "{\"kind\":\"close\"}\n");
+    let mut reply = String::new();
+    std::io::BufReader::new(&mut closing)
+        .read_line(&mut reply)
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&reply).unwrap()["ok"],
+        true
+    );
+
+    // Keep the closing connection open so the daemon is still draining its reply.
+    assert!(!sandbox
+        .home
+        .join(format!("{}.pid", sandbox.session))
+        .exists());
+    assert!(sandbox.ok(&["get-recording"]).contains("\"version\":2"));
 }
 
 /// Auto-started daemons must not inherit stdout and keep captures waiting for EOF.
