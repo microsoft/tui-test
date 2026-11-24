@@ -1312,7 +1312,7 @@ fn spawn_detached(exe: &Path, session: &str, verbose: bool) -> anyhow::Result<()
     Ok(())
 }
 
-/// Stream a session's recording (asciinema v2 cast) to stdout.
+/// Stream a session's recording (asciicast v2 or v3) to stdout.
 fn get_recording(session: String, explicit_config: Option<&Path>) -> i32 {
     let socket = config::socket_name(&session);
     let live_path = if ipc::is_running(&socket) {
@@ -1638,8 +1638,8 @@ fn usage_text() -> &'static str {
     "tui-test: headless terminal cli + daemon\n\
 \n\
 SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
-                  [--config F] [--profile P] [--restart]\n\
-          run [--config F] [--profile P] [--restart] <program> [args...]\n\
+                  [--config F] [--profile P] [--restart] [--recording-mode MODE]\n\
+          run [--config F] [--profile P] [--restart] [--recording-mode MODE] <program> [args...]\n\
           [global options] -- <program> [args...]  (direct run shorthand)\n\
           restart [--graceful-timeout MS]\n\
           interrupt (cancel operations and terminate the child; retain session state)\n\
@@ -1665,9 +1665,10 @@ EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex] | expect bell N\n\
           expect snapshot NAME [-u] [--include-style --include-title] [--cwd DIR]\n\
 DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
-RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
+RECORD    record start OUT [--format apng|gif|mp4|cast|cast3] [--fps N] [--speed N] [--zoom N]\n\
           [--background COLOR | --transparent]\n\
-          record pause|resume|stop | get-recording [session] > out.cast (when tracing is enabled)\n\
+          record pause|resume|stop | get-recording [session] > out.cast\n\
+          open/run --recording-mode disabled|on-failure|always (cast without a trace)\n\
 TRACE     trace finish passed|failed (keep the session open)\n\
 TAPE      tape check FILE | tape run FILE (trusted scripts; isolated local session)\n\
 WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
@@ -1696,6 +1697,28 @@ mod tests {
     use clap::Parser;
     use serde_json::json;
     use std::cell::RefCell;
+
+    #[test]
+    fn automatic_recording_modes_reach_the_daemon_for_open_and_run() {
+        for command in ["open", "run"] {
+            for mode in ["disabled", "on-failure", "always"] {
+                let mut args = vec!["tui-test", command, "--recording-mode", mode];
+                if command == "run" {
+                    args.push("example");
+                }
+                let cli = Cli::try_parse_from(args).unwrap();
+                let request = build_request(cli.command.unwrap()).unwrap();
+                let encoded = serde_json::to_value(&request).unwrap();
+                assert_eq!(encoded["recording"]["mode"], mode);
+                let decoded: Request = serde_json::from_value(encoded).unwrap();
+                let Request::Open { recording, .. } = decoded else {
+                    panic!("expected open request");
+                };
+                assert_eq!(serde_json::to_value(recording.mode).unwrap(), mode);
+            }
+        }
+        assert!(Cli::try_parse_from(["tui-test", "open", "--recording-mode", "on"]).is_err());
+    }
 
     #[test]
     fn query_commands_preserve_every_nested_locator_field() {

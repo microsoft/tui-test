@@ -153,6 +153,7 @@ Timeouts: {
 AutomaticRecordingOptions: {
 "mode": ["mode", "Option<String>"],
 "directory": ["directory", "Option<PathBuf>"],
+"format": ["format", "Option<RecordingFormat>"],
 },
 TraceOptions: {
 "mode": ["mode", "Option<TraceMode>"],
@@ -329,6 +330,7 @@ Apng: "apng",
 Gif: "gif",
 Mp4: "mp4",
 Cast: "cast",
+Cast3: "cast3",
 },
 SnapshotResult: {
 Passed: "passed",

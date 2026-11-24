@@ -296,13 +296,14 @@ test("xterm.js clipboard rejects as InternalError", async () => {
   }
 });
 
-test("recording API writes an asciicast file", async () => {
+for (const [format, version] of [["cast", 2], ["cast3", 3]]) {
+test(`recording API writes an asciicast v${version} file`, async () => {
   const root = mkdtempSync(join(tmpdir(), "tui-test-recording-"));
   const path = join(root, "demo.cast");
   try {
     await withTerminal({ shell }, async (su) => {
       await su.startRecording(path, {
-        format: "cast",
+        format,
         fps: 24,
         speed: 1,
         idleTimeLimit: 2,
@@ -321,13 +322,14 @@ test("recording API writes an asciicast file", async () => {
       await assert.rejects(su.resumeRecording(), /no recording is active/);
     });
     const cast = await readFile(path, "utf8");
-    assert.match(cast, /"version":2/);
+    assert.equal(JSON.parse(cast.split("\n")[0]).version, version);
     assert.match(cast, /sdk-recording/);
     assert.match(cast, /recording-continues/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
+}
 
 test("rendering settings and native assertions preserve binding parity", async () => {
   const root = mkdtempSync(join(tmpdir(), "tui-test-render-parity-"));
@@ -373,19 +375,23 @@ test("rendering settings and native assertions preserve binding parity", async (
 test("trace retention and recording directory are configurable", async () => {
   const root = mkdtempSync(join(tmpdir(), "tui-test-auto-recording-"));
   const disabled = new TuiTest(uniqueSession("recording-disabled"), {
-    recording: { directory: root },
+    recording: { directory: root, format: "cast3" },
     trace: { mode: "off", directory: join(root, "traces") },
   });
   assert.equal((await disabled.open({ shell, waitReady: false })).recording, "");
   await disabled.close();
 
   const always = new TuiTest(uniqueSession("recording-always"), {
-    recording: { directory: root },
+    recording: { directory: root, format: "cast3" },
     trace: { mode: "on", directory: join(root, "traces") },
   });
   const opened = await always.open({ shell, waitReady: false });
   assert.ok(opened.recording.startsWith(root));
   assert.ok(existsSync(opened.recording));
+  assert.equal(JSON.parse((await getRecording(always.session)).split("\n")[0]).version, 3);
+  await always.close();
+  await always.open({ shell, waitReady: false, recording: { directory: root, format: "cast" } });
+  assert.equal(JSON.parse((await getRecording(always.session)).split("\n")[0]).version, 2);
   await always.close();
   rmSync(root, { recursive: true, force: true });
 });

@@ -86,6 +86,49 @@ func TestNativeScrollback(t *testing.T) {
 	}
 }
 
+func TestConstructorRenderingDefaultsAreOwned(t *testing.T) {
+	for _, method := range []string{"open", "run"} {
+		t.Run(method, func(t *testing.T) {
+			style := &tuitest.RenderStyle{
+				FontSize: tuitest.Ptr(24.0),
+				Font:     tuitest.FontFamilies{Family: tuitest.Ptr("monospace")},
+			}
+			terminal := newClient(t, tuitest.ClientOptions{Style: style})
+			*style.FontSize = 48
+			*style.Font.Family = "serif"
+			for index, override := range []*tuitest.RenderStyle{nil, style, nil} {
+				options := tuitest.SpawnOptions{
+					Style: override, WaitReady: tuitest.Ptr(false),
+				}
+				if method == "open" {
+					_, err := terminal.Open(tuitest.OpenOptions{SpawnOptions: options})
+					requireNoError(t, err)
+				} else {
+					runTerminal(t, terminal, options)
+				}
+				path := filepath.Join(t.TempDir(), "screen.svg")
+				_, err := terminal.Screenshot(path, tuitest.ScreenshotOptions{})
+				requireNoError(t, err)
+				svg, err := os.ReadFile(path)
+				requireNoError(t, err)
+				size, family := "24", "monospace"
+				if index == 1 {
+					size, family = "48", "serif"
+				}
+				for _, expected := range []string{`font-size="` + size + `px"`, `font-family="` + family + `"`} {
+					if !strings.Contains(string(svg), expected) {
+						t.Fatalf("spawn %d did not preserve %s", index, expected)
+					}
+				}
+				requireNoError(t, terminal.Close())
+			}
+			if *style.FontSize != 48 || *style.Font.Family != "serif" {
+				t.Fatal("mutated caller-owned rendering options")
+			}
+		})
+	}
+}
+
 func TestSessionParityScopeContextTraceAndInterrupt(t *testing.T) {
 	directory, err := filepath.Abs(filepath.Join("target", fmt.Sprintf("%s-%d-%d", t.Name(), os.Getpid(), time.Now().UnixNano())))
 	requireNoError(t, err)
@@ -615,6 +658,29 @@ func TestRenderingSettingsAndNativeAssertions(t *testing.T) {
 	}})
 	if err == nil || !strings.Contains(err.Error(), "blink_interval_ms") {
 		t.Fatalf("invalid style: %v", err)
+	}
+}
+
+func TestAsciicastV3Recording(t *testing.T) {
+	directory := t.TempDir()
+	terminal := newTerminal(t, tuitest.ClientOptions{Recording: &tuitest.AutomaticRecording{
+		Mode: tuitest.RecordingAlways, Directory: directory, Format: tuitest.Cast3,
+	}})
+	automatic, err := tuitest.Recording(terminal.Session())
+	requireNoError(t, err)
+	if !strings.Contains(automatic, `"version":3`) {
+		t.Fatal("automatic recording is not v3")
+	}
+	path := filepath.Join(directory, "explicit.cast")
+	requireNoError(t, terminal.StartRecording(path, tuitest.RecordingOptions{Format: tuitest.Cast3}))
+	requireNoError(t, terminal.Submit(tuitest.Ptr("recorded-v3")))
+	requireNoError(t, terminal.GetByText("received:recorded-v3", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}))
+	_, err = terminal.StopRecording()
+	requireNoError(t, err)
+	cast, err := os.ReadFile(path)
+	requireNoError(t, err)
+	if !strings.Contains(string(cast), `"version":3`) || !strings.Contains(string(cast), "recorded-v3") {
+		t.Fatalf("invalid v3 recording: %s", cast)
 	}
 }
 

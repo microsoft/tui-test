@@ -15,9 +15,34 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 | `.gif` | Animated GIF | Built in on CLI, JS, Python, and Go; `recording-raster` + fonts in Rust. |
 | `.png`, `.apng` | Animated PNG | Built in on CLI, JS, Python, and Go; `recording-raster` + fonts in Rust. |
 | `.mp4` | H.264 MP4 video | Same raster support plus `ffmpeg` on `PATH` (no transparent background). |
-| `.cast` | Asciinema v2 stream | No font or raster dependencies; replay in any asciinema player. |
+| `.cast` | Asciicast v2 (`cast`) or v3 (`cast3`) | No font or raster dependencies; use a player that supports the selected version. |
 
 The output path extension chooses the format unless overridden by `format` (`--format`).
+
+### Asciicast versions
+
+The `.cast` extension selects v2. Select `cast3` explicitly for v3; both versions use the same extension.
+
+| API | Explicit v3 recording |
+| --- | --- |
+| CLI | `tui-test record start demo.cast --format cast3` |
+| JavaScript | `await terminal.startRecording("demo.cast", { format: "cast3" })` |
+| Python | `await terminal.start_recording("demo.cast", format="cast3")` |
+| Rust | `Operation::StartRecording { format: Some(RecordingFormat::Cast3), ... }` |
+| Go | `terminal.StartRecording("demo.cast", tuitest.RecordingOptions{Format: tuitest.Cast3})` |
+
+Use `cast` (`RecordingFormat::Cast` in Rust, `tuitest.Cast` in Go) for v2.
+V3 stores terminal metadata under `term` and records intervals between events.
+V2 retains its existing header and elapsed timestamps.
+Both formats record the child's launch-time `TERM`, including environment overrides.
+Neither format supports raster canvas options or pause/resume.
+
+The [portable example](https://github.com/microsoft/tui-test/blob/main/crates/tui-test/examples/asciicast_versions.rs)
+checks explicit and automatic recordings with `TERM=vt100`:
+
+```sh
+cargo run -p tui-test-rs --example asciicast_versions
+```
 
 ## Start, pause, resume, and stop
 
@@ -188,4 +213,24 @@ Raster recordings sample the live terminal at `fps` (default `30`) and preserve 
 
 Cursor animation requires both `style.cursor.blink = true` (default) and an application cursor shape that requests blinking. Each visible or hidden phase lasts `blinkIntervalMs` (default `500` ms) before speed scaling.
 
-Automatic asciinema recordings are controlled separately from explicit `startRecording` calls via `[trace]` or `recording: { mode: "disabled" | "on-failure" | "always", directory }`. Retrieve an active or retained automatic cast with `tui-test get-recording`, `getRecording(session)`, `get_recording(session)`, `Recording(session)`, or `session.recording()`. Automatic casts remain continuous even while a raster recording is paused. Recorded files can contain terminal text, environment output, and window titles; review captures before publishing or attaching them to public issues.
+To keep an automatic asciinema cast without trace artifacts, pass `--recording-mode on-failure` or `--recording-mode always` to `tui-test open` or `tui-test run`. In a library, set `recording.mode`. Use `[trace]` instead if you also want trace artifacts.
+
+Retrieve an active or retained cast with `tui-test get-recording`, `getRecording(session)`, `get_recording(session)`, `Recording(session)`, or `session.recording()`. Automatic casts remain continuous even while an explicit raster recording is paused. Recorded files can contain terminal text, environment output, and window titles; review captures before publishing or attaching them to public issues.
+
+Recording is disabled by default. Selecting a format does not enable capture.
+Set `[recording] format = "cast3"` for v3 automatic recordings. This example keeps a v3 cast and trace artifacts on failure:
+
+```toml
+[recording]
+format = "cast3"
+
+[trace]
+mode = "on-failure"
+directory = "traces"
+```
+
+Language APIs accept the same choice through JavaScript `recording: { format: "cast3" }`,
+Python `AutomaticRecording(format="cast3")`, Rust `AutomaticRecording { format: Some(RecordingFormat::Cast3), ..Default::default() }`,
+or Go `AutomaticRecording{Format: tuitest.Cast3}`.
+Constructor and spawn options can select the automatic format.
+Omitting the format preserves v2.

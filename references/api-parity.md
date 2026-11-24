@@ -65,6 +65,12 @@ Both paths use the same Rust evaluator.
 
 Constructor contexts establish defaults. A per-spawn context applies to that operation without changing the constructor options.
 Automatic recording modes are `disabled`, `on-failure`, and `always`.
+The CLI exposes these through `open/run --recording-mode`, independently of
+tracing. Active trace configuration and explicit context trace settings retain
+the Rust engine's precedence over automatic recording.
+Rendering defaults are copied when a library client is constructed; mutating
+the supplied style later does not change future spawns. Per-spawn styles replace
+those defaults for that spawn without modifying them.
 
 Runnable examples:
 

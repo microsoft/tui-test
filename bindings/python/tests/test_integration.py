@@ -145,14 +145,16 @@ class IntegrationTests(unittest.TestCase):
                     sys.executable, "-u", "-c",
                     "import sys; print('cast-only', flush=True); sys.stdin.read()",
                     wait_ready=False,
-                    recording=AutomaticRecording(directory=str(directory), mode="always"),
+                    recording=AutomaticRecording(directory=str(directory), mode="always", format="cast3"),
                 )
                 await terminal.get_by_text("cast-only").expect()
                 self.assertTrue(opened["recording"].startswith(str(directory)))
                 self.assertIn("cast-only", await get_recording(terminal.session))
+                self.assertIn('"version":3', await get_recording(terminal.session))
                 await terminal.close()
                 self.assertIn("cast-only", await get_recording(terminal.session))
                 self.assertEqual(defaults.mode, "disabled")
+                self.assertIsNone(defaults.format)
                 self.assertFalse(list(directory.glob("trace-*")))
             finally:
                 await terminal.close_quiet()
@@ -217,14 +219,14 @@ class IntegrationTests(unittest.TestCase):
         run(scenario())
 
     def test_recording_api_writes_an_asciicast_file(self):
-        async def scenario():
+        async def scenario(format, version):
             with tempfile.TemporaryDirectory() as root:
                 path = Path(root) / "demo.cast"
                 async with self._client() as su:
                     await su.open(shell=SHELL)
                     await su.start_recording(
                         str(path),
-                        format="cast",
+                        format=format,
                         fps=24,
                         speed=1.0,
                         idle_time_limit=2.0,
@@ -238,11 +240,13 @@ class IntegrationTests(unittest.TestCase):
                     await su.wait_command()
                     self.assertEqual(await su.stop_recording(), str(path))
                 cast = path.read_text(encoding="utf-8")
-                self.assertIn('"version":2', cast)
+                self.assertIn('"version":{}'.format(version), cast)
                 self.assertIn("sdk-recording", cast)
                 self.assertIn("recording-continues", cast)
 
-        run(scenario())
+        for format, version in (("cast", 2), ("cast3", 3)):
+            with self.subTest(format=format):
+                run(scenario(format, version))
 
     def test_rendering_settings_and_native_assertions(self):
         async def scenario():

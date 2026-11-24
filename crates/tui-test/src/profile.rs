@@ -334,6 +334,7 @@ impl Default for Profile {
 #[serde(default, deny_unknown_fields)]
 pub struct RecordingConfig {
     pub directory: Option<PathBuf>,
+    pub format: Option<crate::api::RecordingFormat>,
     /// How screenshots and recordings taken under this profile are drawn.
     pub style: Option<crate::render::style::Style>,
 }
@@ -354,6 +355,11 @@ fn fill_missing(overlay: &mut toml::Value, base: &toml::Value) {
 
 impl RecordingConfig {
     fn validate(&self) -> anyhow::Result<()> {
+        crate::api::AutomaticRecording {
+            format: self.format,
+            ..Default::default()
+        }
+        .validate()?;
         if self
             .directory
             .as_ref()
@@ -383,6 +389,7 @@ impl RecordingConfig {
     fn over(&self, base: &RecordingConfig) -> Self {
         Self {
             directory: self.directory.clone().or_else(|| base.directory.clone()),
+            format: self.format.or(base.format),
             style: self.style.clone().or_else(|| base.style.clone()),
         }
     }
@@ -552,6 +559,7 @@ impl ConfigFile {
         // The engine derives recording retention from the trace mode.
         settings.recording = crate::api::AutomaticRecording {
             directory: recording.directory,
+            format: recording.format,
             ..crate::api::AutomaticRecording::default()
         };
         settings.style = recording.style.unwrap_or_default();
@@ -782,6 +790,28 @@ mod tests {
         }
         assert!(ConfigFile::parse("[trace]\nmode = \"always\"\n").is_err());
         assert!(ConfigFile::parse("[trace]\ndirectory = \"\"\n").is_err());
+    }
+
+    #[test]
+    fn automatic_recording_format_inherits_without_enabling_capture() {
+        use crate::api::{AutomaticRecordingMode, RecordingFormat};
+        let config = ConfigFile::parse(
+            "[recording]\nformat = \"cast3\"\n\
+             [profiles.inherit]\nscrollback = 100\n\
+             [profiles.legacy.recording]\nformat = \"cast\"\n",
+        )
+        .unwrap();
+        let inherited = config.settings(Some("inherit")).unwrap();
+        assert_eq!(inherited.recording.format, Some(RecordingFormat::Cast3));
+        assert_eq!(inherited.recording.mode, AutomaticRecordingMode::Disabled);
+        assert_eq!(inherited.trace.mode, crate::diagnostics::TraceMode::Off);
+        assert_eq!(
+            config.settings(Some("legacy")).unwrap().recording.format,
+            Some(RecordingFormat::Cast)
+        );
+        for format in ["gif", "unknown"] {
+            assert!(ConfigFile::parse(&format!("[recording]\nformat = \"{format}\"\n")).is_err());
+        }
     }
 
     #[test]

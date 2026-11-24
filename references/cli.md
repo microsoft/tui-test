@@ -20,6 +20,14 @@ Use `--session NAME` to select a session. `open` and `run` reuse it unless `--re
 
 `open` and `run` accept `--screen-history-limit COUNT` to control how many distinct recent screens are retained for failures.
 
+Use `--recording-mode disabled|on-failure|always` with `open` or `run` to control
+automatic asciicast capture without enabling a trace. The default is `disabled`.
+`on-failure` keeps the cast after a failed assertion or an internal error. Use
+`trace finish failed` or `trace finish passed` before `close` to override that
+outcome. `always` also keeps successful sessions.
+`[recording].directory` still selects the destination. Active tracing takes
+precedence over this flag, as does an explicit trace setting in `--context-file`.
+
 `restart` replays the last successful spawn, preserving its original working directory, options, and latest terminal size. It sends Ctrl-C and waits up to 5000 ms before forcing replacement; `--graceful-timeout 0` skips the wait. It works after child exit, but not after `close` or daemon shutdown. The terminal and automatic recording start fresh.
 
 `interrupt` calls the same cancellation mechanism as Rust `Session::interrupt`.
@@ -316,6 +324,21 @@ Media formats round durations to their supported precision.
 Recordings retain frames in memory until export and merge identical samples.
 
 Cast files retain timestamped terminal output and resize events.
+`--format cast` selects asciicast v2; `--format cast3` selects asciicast v3.
+The `.cast` extension without an explicit format selects v2.
+V2 stores elapsed timestamps. V3 stores intervals between events and terminal metadata under `term`.
+Both formats use `.cast` files. V3 requires a compatible player.
+
+```sh
+tui-test record start demo.cast --format cast3
+# Drive the session, then finish the file.
+tui-test record stop
+```
+
+For automatic recordings, set `format = "cast3"` under `[recording]`.
+Omitting that field preserves v2. The format does not enable recording;
+use `--recording-mode` for a cast without a trace, or `[trace]` to keep trace artifacts too.
+
 FPS sampling does not change this stream or add viewport movements.
 The external player selects its own emulator.
 The cast does not explicitly represent quiet time after its last event.
@@ -586,7 +609,8 @@ font_size = 24
 The `docs` profile still writes to `./artifacts` and draws at 24px over the
 `#101014` canvas with 32px of padding. Inheritance is key by key at every
 depth, so naming one style key keeps the rest of the file's look. Whether a
-recording is kept is not a `[recording]` key: that follows `[trace] mode`.
+recording is kept is not a `[recording]` key: use `--recording-mode` for cast-only
+capture, or `[trace] mode` to retain casts alongside trace artifacts.
 
 This also applies when the file uses uniform padding and a profile overrides one side:
 
