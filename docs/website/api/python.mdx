@@ -68,7 +68,7 @@ TuiTest.ephemeral(prefix=None, **options)
 | `profile` | `Profile \| dict` | `scrollback=10000`, default palette |
 | `style` | `RenderStyle \| dict` | default window, font, padding, and cursor style |
 | `screen_history_limit` | `int \| None` | `10` |
-| `recording` | `AutomaticRecording \| dict` (`directory`, `mode`) | `mode="disabled"` |
+| `recording` | `AutomaticRecording \| dict` (`directory`, `mode`, `format`) | `mode="disabled"`, `format="cast"` |
 | `artifacts` | `dict` (`dir`, `on_failure`, `include_recording`) | off |
 | `trace` | `TraceOptions \| dict` (`mode`, `directory`) | `{"mode": "off", "directory": ".tui-test/traces"}` |
 | `context` | `ExecutionContext` (`operation_name`, `diagnostic_context`, `artifacts`, `trace`, `screen_history_limit`) | none |

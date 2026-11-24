@@ -316,6 +316,21 @@ Media formats round durations to their supported precision.
 Recordings retain frames in memory until export and merge identical samples.
 
 Cast files retain timestamped terminal output and resize events.
+`--format cast` selects asciicast v2; `--format cast3` selects asciicast v3.
+The `.cast` extension without an explicit format selects v2.
+V2 stores elapsed timestamps. V3 stores intervals between events and terminal metadata under `term`.
+Both formats use `.cast` files. V3 requires a compatible player.
+
+```sh
+tui-test record start demo.cast --format cast3
+# Drive the session, then finish the file.
+tui-test record stop
+```
+
+For automatic recordings, set `format = "cast3"` under `[recording]`.
+Omitting that field preserves v2. The format does not enable recording;
+trace settings still control automatic capture and retention.
+
 FPS sampling does not change this stream or add viewport movements.
 The external player selects its own emulator.
 The cast does not explicitly represent quiet time after its last event.

@@ -21,6 +21,7 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
         recording: AutomaticRecording {
             mode: AutomaticRecordingMode::Disabled,
             directory: None,
+            format: None,
         },
     }
 }
