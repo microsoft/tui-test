@@ -1,0 +1,54 @@
+---
+title: Tape files
+description: Validate and execute declarative VHS-style .tape scripts to generate terminal GIFs.
+editUrl: false
+---
+
+The CLI (`tui-test tape`) and the Rust `tui_test::tape` module compile and run a subset of [Charmbracelet VHS's supported tape commands](https://github.com/charmbracelet/vhs#vhs-command-reference) to export a GIF from an isolated shell session. Python, JavaScript, and Go bindings do not expose a tape API; use [session recordings](/docs/capture/recordings/) when driving captures from code.
+
+## Write a tape
+
+Save the following script as `demo.tape`:
+
+```text
+Output demo.gif
+Set Columns 48
+Set Rows 8
+Set Padding 16
+Set FontSize 18
+Set CursorBlink false
+Hide
+Type@0 'echo Hello from tui-test'
+Show
+Enter@200ms
+Sleep 1s
+Hide
+```
+
+Only run `.tape` files you trust. Tape scripts execute real commands in a local shell without sandboxing, and `tape check` validates syntax and preflight requirements rather than command safety.
+
+## Validate and run
+
+```sh
+tui-test tape check demo.tape --json
+tui-test tape run demo.tape
+```
+
+`tape check` parses the file, resolves `Source` imports, compiles the execution plan, and verifies `Require` binaries and output paths without starting a shell or writing files. `tape run` performs the same validation, runs the plan in an isolated session (defaulting to `bash` on Unix or PowerShell on Windows), writes `demo.gif`, and tears down the session. Both commands report grid dimensions, pixel dimensions, and source-located warnings.
+
+To try the checked-in fixture from a source checkout:
+
+```sh
+tui-test tape check crates/tui-test/tests/fixtures/tape/run.tape --json
+tui-test tape run crates/tui-test/tests/fixtures/tape/run.tape
+```
+
+## Path resolution and CLI behavior
+
+- Root tape paths, `Source` includes, `Require` lookups, and `Output` paths resolve relative to the caller's working directory, not the directory containing the `.tape` file.
+- Tape delays (`Sleep`, `@duration`) are fixed timers and do not wait for shell commands to finish; reaching the end of the tape closes the shell even if a background command is still running. Use regular `tui-test` sessions when you need state-based waits or assertions.
+- Tape commands run standalone without CLI daemons, `tui-test.toml`, or `TUI_TEST_SESSION`. Only the global `--json` flag is accepted; `--session`, `--verbose`, `--failure-artifacts`, `--diagnostic-context`, `--context-file`, and `--operation-name` are rejected with exit code `2`.
+
+## Rust `tui_test::tape` module
+
+In Rust, `tui_test::tape` exposes `parse`, `load`, `compile`, `check`, and `run`. Parsing and compilation work without optional Cargo features; `check` and `run` require `recording-raster` (plus `recording-font-jetbrains-mono` to bundle the default font). `tui-test` implements a subset of the [VHS command reference](https://github.com/charmbracelet/vhs#vhs-command-reference) (based on VHS v0.12.1) rather than every VHS directive; see [`references/tape.md`](https://github.com/microsoft/tui-test/blob/main/references/tape.md) and [`docs.rs/tui-test-rs/latest/tui_test/tape`](https://docs.rs/tui-test-rs/latest/tui_test/tape/) for the exact supported commands, settings, and differences.

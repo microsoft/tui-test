@@ -54,9 +54,7 @@ func bundleTarget(goos, goarch, libc string) (string, error) {
 				return arch + "-unknown-linux-" + libc, nil
 			}
 		case "windows":
-			if goarch == "amd64" {
-				return arch + "-pc-windows-msvc", nil
-			}
+			return arch + "-pc-windows-msvc", nil
 		}
 	}
 	return "", fmt.Errorf("no bundled native engine supports %s/%s with libc %q", goos, goarch, libc)

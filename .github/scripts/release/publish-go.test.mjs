@@ -64,7 +64,7 @@ test("publication creates a release-only tag and accepts identical retries", t =
   assert.equal(p.ref("refs/heads/main"), p.fixture.revision);
   assert.equal(p.ref("refs/tags/1.2.3"), p.fixture.revision);
   const files = p.git(["ls-tree", "-r", "--name-only", tag], p.remote).trim().split("\n");
-  assert.equal(files.filter(name => name.endsWith(".tar.gz")).length, 7);
+  assert.equal(files.filter(name => name.endsWith(".tar.gz")).length, 8);
   const module = directoryEntries(p.fixture.output);
   const names = p.git(["ls-tree", "-r", "--name-only", `${tag}:bindings/go`], p.remote).trim().split("\n");
   assert.deepEqual(new Set(names), new Set(module.keys()));
