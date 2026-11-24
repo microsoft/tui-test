@@ -18,6 +18,7 @@ export function parseZigEnvField(output, field) {
 }
 
 export function patchWindowsSelfInfo(filename, version) {
+  if (version !== "0.16.0") return "not-needed";
   const source = fs.readFileSync(filename, "utf8");
   if (source.includes(PATCHED)) return "already-patched";
   const parts = source.split(UNPATCHED);
@@ -25,10 +26,7 @@ export function patchWindowsSelfInfo(filename, version) {
     fs.writeFileSync(filename, parts.join(PATCHED));
     return "patched";
   }
-  if (version === "0.16.0") {
-    throw new Error(`Expected one unpatched loadNtdllProc @ptrCast in ${filename}, found ${parts.length - 1}`);
-  }
-  return "not-needed";
+  throw new Error(`Expected one unpatched loadNtdllProc @ptrCast in ${filename}, found ${parts.length - 1}`);
 }
 
 function main() {
