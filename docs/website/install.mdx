@@ -1,6 +1,6 @@
 ---
 title: Install tui-test
-description: Install the tui-test CLI, agent skill, or JavaScript, Python, Rust, or Go library.
+description: Install the tui-test CLI, agent skill, language libraries, or C/C++ SDK.
 editUrl: false
 ---
 
@@ -100,6 +100,18 @@ Each library runs the terminal engine in-process.
     See the [Go API](/docs/api/go/).
   </TabItem>
 </Tabs>
+
+### C and C++ SDK
+
+Download `tui-test-c-sdk-<version>-<target>.tar.gz` from [GitHub Releases](https://github.com/microsoft/tui-test/releases).
+Verify its adjacent `.sha256` file before extraction.
+The SDK contains a shared library, generated C header, CMake configuration, and C/C++ examples.
+It does not contain a static engine library.
+
+The optional `tui-test-with-c-sdk-<version>-<target>.tar.gz` archive also contains the CLI.
+The GNU/Linux shared library requires glibc 2.28 or newer; this minimum does not apply to the CLI.
+The 0.1.1 x86-64 GNU/Linux CLI requires glibc 2.35.
+See the [C and C++ API guide](/docs/api/c/) for targets, build commands, and deployment requirements.
 
 ### Custom native library path
 

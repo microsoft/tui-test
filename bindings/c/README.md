@@ -11,12 +11,16 @@ Check the adjacent `.sha256` file before extraction.
 The optional `tui-test-with-c-sdk-<version>-<target>.tar.gz` archive also
 contains the CLI in `bin/`. Existing CLI and language packages do not change.
 
-| Target | Runtime |
+| Target | Shared library runtime |
 | --- | --- |
 | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | glibc 2.28 or later |
 | `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` | musl Linux |
 | `x86_64-apple-darwin`, `aarch64-apple-darwin` | macOS on the matching CPU |
-| `x86_64-pc-windows-msvc` | Windows x64 with the MSVC runtime |
+| `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc` | Windows on the matching CPU with the MSVC runtime |
+
+The glibc 2.28 minimum applies to the shared library, not the CLI in a combined
+archive. The 0.1.1 x86-64 GNU/Linux CLI requires glibc 2.35. Check the CLI's
+requirements separately before selecting a combined archive.
 
 These are **shared libraries**, not static libraries. Match the OS, CPU, and
 C runtime of the application. A musl library does not work in a glibc process.
@@ -39,15 +43,14 @@ ctest --test-dir build -C Release --verbose
 ```
 
 In PowerShell, use `-DCMAKE_PREFIX_PATH="$PWD/sdk"` with the same commands.
-CMake selects the installed C/C++ toolchain. Use an x64 MSVC toolchain for
-the Windows SDK.
+CMake selects the installed C/C++ toolchain. Use an MSVC toolchain that matches
+the Windows SDK architecture.
 
 `basic.c` launches a copy of itself as a child. It waits for the child's text,
 reads the terminal, and closes the session. It does not depend on a shell.
-The expected output for ABI 7 is:
+The first output line reports the ABI version. The remaining output is:
 
 ```text
-ABI: 7
 Captured: Hello from C SDK
 Closed session.
 ```
@@ -160,3 +163,6 @@ For example:
 The examples use this expression with `tui_wait_locator()` and its asynchronous
 form. The C boundary uses the Rust locator model; it does not parse a separate
 selector language.
+
+See the [C and C++ website guide](https://tui-test.dev/docs/api/c/) for SDK
+installation and application deployment.

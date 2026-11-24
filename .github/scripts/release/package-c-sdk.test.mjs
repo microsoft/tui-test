@@ -25,7 +25,10 @@ test("SDK archives include matching headers, libraries, CMake, examples, and che
     const windows = target.includes("windows");
     const entries = sdkEntries(f.root, target, libraryFixture(target), windows ? importLibrary : undefined);
     const manifest = JSON.parse(entries.get("manifest.json"));
-    assert.equal(manifest.abiVersion, 7);
+    const header = entries.get("include/tui_test.h").toString("utf8");
+    const abi = header.match(/^#define ABI_VERSION (\d+)$/m);
+    assert.ok(abi, "the packaged header declares its ABI version");
+    assert.equal(manifest.abiVersion, Number(abi[1]));
     assert.equal(manifest.target, target);
     assert.equal(manifest.revision, f.revision);
     assert.equal(entries.has("lib/tui_test_ffi.lib"), windows);

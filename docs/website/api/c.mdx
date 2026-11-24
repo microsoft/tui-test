@@ -1,0 +1,115 @@
+---
+title: C and C++
+description: Download the shared-library SDK, build C/C++ consumers, and manage native ABI ownership.
+editUrl: false
+---
+
+The C SDK runs the tui-test engine inside your application through its generated C ABI.
+C and C++ consumers do not need the CLI daemon or a language runtime.
+The SDK contains **shared libraries, not static libraries**.
+
+## Download and platform requirements
+
+Select `tui-test-c-sdk-<version>-<target>.tar.gz` from [GitHub Releases](https://github.com/microsoft/tui-test/releases).
+Check the adjacent `.sha256` file before extraction.
+The optional `tui-test-with-c-sdk-<version>-<target>.tar.gz` archive also contains the CLI under `bin/`.
+
+| Target | Shared library runtime |
+| --- | --- |
+| `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | glibc 2.28 or newer |
+| `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` | musl Linux |
+| `x86_64-apple-darwin`, `aarch64-apple-darwin` | macOS on the matching CPU |
+| `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc` | Windows on the matching CPU with the MSVC runtime |
+
+Match the OS, CPU, and C runtime of your application.
+A musl library cannot load into a glibc process.
+The glibc 2.28 minimum applies only to the shared library.
+The 0.1.1 x86-64 GNU/Linux CLI requires glibc 2.35, so check CLI requirements separately for combined archives.
+
+Each SDK includes `include/tui_test.h`, CMake configuration, examples, license notices, and a checksummed manifest.
+The manifest records the target, source revision, package version, and ABI version.
+Windows packages contain `bin/tui_test_ffi.dll` and `lib/tui_test_ffi.lib`.
+That `.lib` file is an import library; the engine remains in the DLL.
+
+## Build and run the examples
+
+Extract the SDK into `sdk`, then run:
+
+```sh
+cmake -S sdk/examples -B build -DCMAKE_PREFIX_PATH="$PWD/sdk"
+cmake --build build --config Release
+ctest --test-dir build -C Release --verbose
+```
+
+These commands also work in PowerShell.
+Use a C/C++ toolchain that matches the archive architecture.
+
+`basic.c` launches itself as a child, waits for text, reads the terminal, and closes the session.
+`async.c` starts a wait task and polls it on the same thread.
+`cpp.cpp` uses the same example from C++.
+Each example checks the runtime ABI against the header before other API calls.
+
+After the ABI version line, the synchronous examples print:
+
+```text
+Captured: Hello from C SDK
+Closed session.
+```
+
+The asynchronous example also prints `Wait completed asynchronously.`.
+See the [example sources](https://github.com/microsoft/tui-test/tree/main/bindings/c/examples).
+
+## Link your application
+
+Use the imported CMake target:
+
+```cmake
+find_package(tui-test CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE tui-test::ffi)
+```
+
+Set `CMAKE_PREFIX_PATH` to the extracted SDK directory.
+The target supplies the header directory and shared library.
+The SDK can move before configuration; its CMake files contain no build-machine paths.
+
+On Windows, copy the DLL beside your executable:
+
+```cmake
+add_custom_command(TARGET my_app POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:tui-test::ffi> $<TARGET_FILE_DIR:my_app>)
+```
+
+On Linux and macOS, CMake supplies a runtime search path for the build directory.
+For deployment, install the shared library with your application and set its install RPATH.
+Use `$ORIGIN` on Linux or `@loader_path` on macOS, relative to your application layout.
+The macOS library uses the install name `@rpath/libtui_test_ffi.dylib`.
+
+## ABI, sessions, and ownership
+
+Include the packaged `tui_test.h` rather than copied declarations.
+Compare `tui_abi_version()` with `ABI_VERSION` before other calls.
+Always use the header and library from the same SDK.
+Zero-initialize option structures; optional fields use `present` to distinguish a value from a default.
+
+Most session arguments contain JSON, such as `{"name":"example"}`.
+The exceptions are `tui_recording()` and `tui_recording_start()`, which accept the plain UTF-8 session name.
+Use a JSON encoder for session objects that contain user input.
+
+`TuiString` contains UTF-8 bytes and a byte length; it need not end with a NUL byte.
+Keep input buffers readable for synchronous calls.
+Asynchronous start functions copy their inputs before they return.
+
+Check `TuiResult.error_kind`; zero means success.
+Output pointers belong to the result.
+Copy any output you need before `tui_result_free()`, and free each result exactly once, including error results.
+Call `tui_close()` on success and error paths to release the child and session.
+
+Start, poll, and free each `TuiTask` on the same thread.
+A NULL poll result means pending; a completed poll transfers result ownership once.
+Free both the completed result and the task.
+A task free does not cancel its operation; use `tui_interrupt()` to cancel operations and terminate the child.
+
+The generated header documents each function and its safety requirements.
+See the [SDK reference](https://github.com/microsoft/tui-test/blob/main/bindings/c/README.md#session-context-and-locators)
+for session context fields and locator JSON.

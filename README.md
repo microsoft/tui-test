@@ -8,7 +8,7 @@
   <a href="https://github.com/microsoft/tui-test/releases">Releases</a>
 </p>
 
-`tui-test` controls, inspects, tests, and records real shell sessions and full-screen terminal apps on Windows, Linux, and macOS. In addition to its CLI, it has libraries for Rust, Python, JavaScript, and Go. `tui-test` gives AI agents the ability to record videos/gifs of terminals, perform terminal operations, create end-to-end tests for terminal applications, and expose structured access to terminal state.
+`tui-test` controls, inspects, tests, and records real shell sessions and full-screen terminal apps on Windows, Linux, and macOS. In addition to its CLI, it has libraries for Rust, Python, JavaScript, Go, C, and C++. `tui-test` gives AI agents the ability to record videos/gifs of terminals, perform terminal operations, create end-to-end tests for terminal applications, and expose structured access to terminal state.
 
 ## Installation
 
