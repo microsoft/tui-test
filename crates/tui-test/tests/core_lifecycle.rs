@@ -484,8 +484,15 @@ fn interrupt_cancels_startup_readiness_before_a_session_is_published() {
         finished_tx.send(opening.run(run)).unwrap();
     });
 
-    // The recording is published after the child starts but before readiness.
-    wait_until(|| session.recording_path().is_some());
+    // A recording header can precede child initialization. Wait for output,
+    // but not a shell prompt, so cancellation still interrupts startup readiness.
+    wait_until(|| {
+        session.recording_path().is_some_and(|path| {
+            std::fs::read_to_string(path)
+                .unwrap()
+                .contains("fixture-ready")
+        })
+    });
     let started = Instant::now();
     session.interrupt();
     let result = finished_rx.recv_timeout(Duration::from_secs(2));
@@ -511,7 +518,13 @@ fn close_all_cancels_startup_before_acquiring_the_lifecycle_lock() {
     run.recording.mode = AutomaticRecordingMode::Always;
     run.recording.directory = Some(directory.clone());
     let worker = std::thread::spawn(move || session.run(run));
-    wait_until(|| std::fs::read_dir(&directory).unwrap().next().is_some());
+    wait_until(|| {
+        std::fs::read_dir(&directory).unwrap().any(|entry| {
+            std::fs::read_to_string(entry.unwrap().path())
+                .unwrap()
+                .contains("fixture-ready")
+        })
+    });
 
     let started = Instant::now();
     registry.close_all();

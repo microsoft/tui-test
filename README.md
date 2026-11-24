@@ -8,7 +8,7 @@
   <a href="https://github.com/microsoft/tui-test/releases">Releases</a>
 </p>
 
-`tui-test` controls, inspects, tests, and records real shell sessions and full-screen terminal apps on Windows, Linux, and macOS. In addition to its CLI, it has libraries for Rust, Python, JavaScript, and Go. `tui-test` gives AI agents the ability to record videos/gifs of terminals, perform terminal operations, create end-to-end tests for terminal applications, and expose structured access to terminal state.
+`tui-test` controls, inspects, tests, and records real shell sessions and full-screen terminal apps on Windows, Linux, and macOS. In addition to its CLI, it has libraries for Rust, Python, JavaScript, Go, C, and C++. `tui-test` gives AI agents the ability to record videos/gifs of terminals, perform terminal operations, create end-to-end tests for terminal applications, and expose structured access to terminal state.
 
 ## Installation
 
@@ -55,8 +55,14 @@ tui-test skill --add
 | Python | `pip install tui-test` |
 | Rust | `cargo add tui-test-rs@0.1.1` |
 | Go | `go get github.com/microsoft/tui-test/bindings/go@v0.1.1` |
+| C / C++ | Download the matching [C SDK](https://tui-test.dev/docs/api/c/) from GitHub Releases |
 
 See the [installation guide](https://tui-test.dev/docs/install/) for runtime requirements and supported platforms.
+
+Go, Python, and JavaScript use one [native adapter crate](crates/tui-test-ffi/README.md).
+All three use its generated C ABI declarations through purego, ctypes, and Koffi, respectively.
+Set `TUI_TEST_NATIVE_LIBRARY` to select a matching library explicitly.
+The C SDK packages the same engine as shared libraries, not static libraries, with a generated header, CMake support, and C/C++ examples.
 
 ## Examples
 

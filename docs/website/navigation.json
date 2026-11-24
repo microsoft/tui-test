@@ -41,7 +41,8 @@
         "api/javascript",
         "api/python",
         "api/rust",
-        "api/go"
+        "api/go",
+        "api/c"
       ]
     },
     {

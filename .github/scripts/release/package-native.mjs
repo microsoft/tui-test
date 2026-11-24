@@ -28,28 +28,41 @@ export function sha256(data) {
 }
 
 export function validateLibrary(data, target) {
+  validateBinary(data, target, false);
+}
+
+export function validateExecutable(data, target) {
+  validateBinary(data, target, true);
+}
+
+function validateBinary(data, target, executable) {
   const arm = target.startsWith("aarch64-");
   let valid = false;
   if (target.includes("linux")) {
     valid = data.length >= 20 && data.subarray(0, 6).equals(Buffer.from("\x7fELF\x02\x01"))
-      && data.readUInt16LE(16) === 3 && data.readUInt16LE(18) === (arm ? 183 : 62);
+      && (executable ? [2, 3].includes(data.readUInt16LE(16)) : data.readUInt16LE(16) === 3)
+      && data.readUInt16LE(18) === (arm ? 183 : 62);
   } else if (target.includes("apple")) {
     valid = data.length >= 16 && data.readUInt32LE(0) === 0xfeedfacf
-      && data.readUInt32LE(4) === (arm ? 0x100000c : 0x1000007) && data.readUInt32LE(12) === 6;
+      && data.readUInt32LE(4) === (arm ? 0x100000c : 0x1000007)
+      && data.readUInt32LE(12) === (executable ? 2 : 6);
   } else if (data.length >= 64) {
     const offset = data.readUInt32LE(60);
     valid = data.length >= offset + 24 && data.subarray(0, 2).equals(Buffer.from("MZ"))
       && data.subarray(offset, offset + 4).equals(Buffer.from("PE\0\0"))
-      && data.readUInt16LE(offset + 4) === (arm ? 0xaa64 : 0x8664) && (data.readUInt16LE(offset + 22) & 0x2000) !== 0;
+      && data.readUInt16LE(offset + 4) === (arm ? 0xaa64 : 0x8664)
+      && (executable
+        ? (data.readUInt16LE(offset + 22) & 0x2002) === 0x0002
+        : (data.readUInt16LE(offset + 22) & 0x2000) !== 0);
   }
-  if (!valid) throw new Error(`Library format or architecture does not match ${target}`);
+  if (!valid) throw new Error(`${executable ? "Executable" : "Library"} format or architecture does not match ${target}`);
 }
 
-export function archiveBytes(entries) {
+export function archiveBytes(entries, executablePaths = new Set()) {
   const blocks = [];
   for (const [name, data] of [...entries].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     const header = new Header({
-      path: name, size: data.length, mode: 0o644, uid: 0, gid: 0,
+      path: name, size: data.length, mode: executablePaths.has(name) ? 0o755 : 0o644, uid: 0, gid: 0,
       mtime: new Date(0), type: "File", uname: "", gname: "",
     });
     if (header.encode()) throw new Error(`Archive path requires extended headers: ${name}`);
@@ -59,8 +72,8 @@ export function archiveBytes(entries) {
   return gzipSync(Buffer.concat(blocks));
 }
 
-export function writeArchive(filename, entries) {
-  const data = archiveBytes(entries);
+export function writeArchive(filename, entries, executablePaths = new Set()) {
+  const data = archiveBytes(entries, executablePaths);
   fs.writeFileSync(filename, data);
   fs.writeFileSync(`${filename}.sha256`, `${sha256(data)}  ${path.basename(filename)}\n`);
 }
