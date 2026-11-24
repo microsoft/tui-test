@@ -1,16 +1,47 @@
 import asyncio
+import copy
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
 from tui_test import (
-    AutomaticRecording, ExecutionContext, TextAnchor, TextScope, TextStyle,
-    TraceOptions, TuiTest,
+    AutomaticRecording, ExecutionContext, FontFamilies, PaddingSides, RenderStyle,
+    TextAnchor, TextScope, TextStyle, TraceOptions, TuiTest, WindowStyle,
 )
 from tui_test import _native
 
 
 class ParityTests(unittest.TestCase):
+    def test_constructor_rendering_defaults_are_owned_across_spawns(self):
+        for method in ("open", "run"):
+            with self.subTest(method=method):
+                style = RenderStyle(
+                    font_size=24,
+                    font=FontFamilies(family="monospace", files=["original.ttf"]),
+                    content_padding=PaddingSides(left=0),
+                    window=WindowStyle(title_bar=False),
+                )
+                original = copy.deepcopy(style)
+                terminal = TuiTest("parity", style=style)
+                style.font_size = 48
+                style.font.family = "serif"
+                style.font.files[0] = "changed.ttf"
+                style.content_padding.left = 10
+                style.window.title_bar = True
+                override = copy.deepcopy(style)
+
+                async def scenario():
+                    args = ("example",) if method == "run" else ()
+                    await getattr(terminal, method)(*args)
+                    await getattr(terminal, method)(*args, style=style)
+                    await getattr(terminal, method)(*args)
+
+                with patch.object(terminal._native, method, new_callable=AsyncMock) as spawn:
+                    asyncio.run(scenario())
+                self.assertEqual([call.args[-1] for call in spawn.await_args_list],
+                                 [original, override, original])
+                self.assertEqual(style, override)
+
     def test_scoped_text_and_whole_match_style_are_immutable(self):
         terminal = TuiTest("parity")
         scope = TextScope(after=TextAnchor("Start", regex=True, occurrence=1),

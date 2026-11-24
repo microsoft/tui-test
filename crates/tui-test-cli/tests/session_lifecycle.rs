@@ -796,9 +796,7 @@ impl Drop for Sandbox {
     }
 }
 
-/// Connect to the session socket and send one request line, leaving the stream
-/// open for whatever the request streams next.
-fn monitor_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socket::Stream {
+fn request_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socket::Stream {
     let raw = cli_config::socket_name_in(&sandbox.home, &sandbox.session);
     let name = if cfg!(windows) {
         raw.to_ns_name::<GenericNamespaced>()
@@ -808,10 +806,13 @@ fn monitor_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socke
     .expect("valid session socket name");
     let mut stream =
         interprocess::local_socket::Stream::connect(name).expect("connect session socket");
+    stream.write_all(request.as_bytes()).expect("send request");
+    stream.flush().expect("flush request");
     stream
-        .write_all(request.as_bytes())
-        .expect("send monitor request");
-    stream.flush().expect("flush monitor request");
+}
+
+fn monitor_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socket::Stream {
+    let mut stream = request_stream(sandbox, request);
     if request.contains("\"monitor_input_stream\"") {
         let mut response = String::new();
         std::io::BufReader::new(&mut stream)
@@ -997,6 +998,28 @@ fn close_always_reports_success() {
             String::from_utf8_lossy(&out.stderr),
         );
     }
+}
+
+#[test]
+fn close_acknowledges_after_the_cast_is_available_offline() {
+    let sandbox = Sandbox::new("close-cast");
+    sandbox.ok(&["open", "--no-wait-ready", "--recording-mode", "always"]);
+    let mut closing = request_stream(&sandbox, "{\"kind\":\"close\"}\n");
+    let mut reply = String::new();
+    std::io::BufReader::new(&mut closing)
+        .read_line(&mut reply)
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&reply).unwrap()["ok"],
+        true
+    );
+
+    // Keep the closing connection open so the daemon is still draining its reply.
+    assert!(!sandbox
+        .home
+        .join(format!("{}.pid", sandbox.session))
+        .exists());
+    assert!(sandbox.ok(&["get-recording"]).contains("\"version\":2"));
 }
 
 /// Auto-started daemons must not inherit stdout and keep captures waiting for EOF.
@@ -2330,6 +2353,102 @@ fn automatic_recording_mode_and_directory_come_from_config() {
     let payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(payload["data"]["recording"], "");
     sandbox.ok(&["close"]);
+}
+
+#[test]
+fn automatic_recording_modes_work_without_traces() {
+    for mode in ["disabled", "on-failure", "always"] {
+        for failed in [false, true] {
+            let sandbox = Sandbox::new("cast-only");
+            let config = sandbox.home.join("recording.toml");
+            std::fs::write(
+                &config,
+                "[recording]\ndirectory = \"casts\"\nformat = \"cast3\"\n[trace]\nmode = \"off\"\ndirectory = \"traces\"\n",
+            )
+            .unwrap();
+            let mut args = vec!["--json"];
+            if failed {
+                args.extend(["--diagnostic-context", "suite=cast-only"]);
+            }
+            args.extend([
+                "run",
+                "--config",
+                config.to_str().unwrap(),
+                "--recording-mode",
+                mode,
+            ]);
+            args.extend(sleeper());
+            let raw = sandbox.ok(&args);
+            let payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            let path = payload["data"]["recording"].as_str().unwrap();
+            if mode == "disabled" {
+                assert!(path.is_empty());
+                assert_eq!(sandbox.run(&["get-recording"]).status.code(), Some(3));
+            } else {
+                assert!(PathBuf::from(path).starts_with(sandbox.home.join("casts")));
+                assert!(sandbox.ok(&["get-recording"]).contains("\"version\":3"));
+            }
+            if failed {
+                let assertion = sandbox.run(&["expect", "text", "not on screen", "--timeout", "0"]);
+                assert_eq!(assertion.status.code(), Some(1));
+            }
+            sandbox.ok(&["close"]);
+            let retained = mode == "always" || (mode == "on-failure" && failed);
+            assert_eq!(PathBuf::from(path).is_file(), retained);
+            if retained {
+                assert!(sandbox.ok(&["get-recording"]).contains("\"version\":3"));
+            } else {
+                assert_eq!(sandbox.run(&["get-recording"]).status.code(), Some(3));
+            }
+            assert!(!sandbox.home.join("traces").exists());
+        }
+    }
+}
+
+#[test]
+fn automatic_recording_modes_preserve_trace_precedence() {
+    for (trace_mode, context_mode, recording_mode, recorded, traced) in [
+        ("on", None, "disabled", true, true),
+        ("off", Some("off"), "always", false, false),
+        ("off", Some("on-failure"), "disabled", true, true),
+    ] {
+        let sandbox = Sandbox::new("cast-trace-precedence");
+        let config = sandbox.home.join("recording.toml");
+        std::fs::write(
+            &config,
+            format!("[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"{trace_mode}\"\ndirectory = \"traces\"\n"),
+        )
+        .unwrap();
+        let context = sandbox.home.join("context.json");
+        let mut args = vec!["--json"];
+        if let Some(mode) = context_mode {
+            std::fs::write(
+                &context,
+                serde_json::to_vec(&serde_json::json!({
+                    "trace": {"mode": mode, "directory": sandbox.home.join("traces")}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            args.extend(["--context-file", context.to_str().unwrap()]);
+        }
+        args.extend([
+            "open",
+            "--config",
+            config.to_str().unwrap(),
+            "--no-wait-ready",
+            "--recording-mode",
+            recording_mode,
+        ]);
+        let payload: serde_json::Value = serde_json::from_str(&sandbox.ok(&args)).unwrap();
+        assert_eq!(
+            !payload["data"]["recording"].as_str().unwrap().is_empty(),
+            recorded
+        );
+        sandbox.ok(&["trace", "finish", "failed"]);
+        sandbox.ok(&["close"]);
+        assert_eq!(sandbox.home.join("traces").is_dir(), traced);
+    }
 }
 
 #[test]

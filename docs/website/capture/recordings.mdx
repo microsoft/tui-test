@@ -213,10 +213,12 @@ Raster recordings sample the live terminal at `fps` (default `30`) and preserve 
 
 Cursor animation requires both `style.cursor.blink = true` (default) and an application cursor shape that requests blinking. Each visible or hidden phase lasts `blinkIntervalMs` (default `500` ms) before speed scaling.
 
-Automatic asciinema recordings are controlled separately from explicit `startRecording` calls via `[trace]` or `recording: { mode: "disabled" | "on-failure" | "always", directory, format }`. Retrieve an active or retained automatic cast with `tui-test get-recording`, `getRecording(session)`, `get_recording(session)`, `Recording(session)`, or `session.recording()`. Automatic casts remain continuous even while a raster recording is paused. Recorded files can contain terminal text, environment output, and window titles; review captures before publishing or attaching them to public issues.
+To keep an automatic asciinema cast without trace artifacts, pass `--recording-mode on-failure` or `--recording-mode always` to `tui-test open` or `tui-test run`. In a library, set `recording.mode`. Use `[trace]` instead if you also want trace artifacts.
+
+Retrieve an active or retained cast with `tui-test get-recording`, `getRecording(session)`, `get_recording(session)`, `Recording(session)`, or `session.recording()`. Automatic casts remain continuous even while an explicit raster recording is paused. Recorded files can contain terminal text, environment output, and window titles; review captures before publishing or attaching them to public issues.
 
 Recording is disabled by default. Selecting a format does not enable capture.
-Set `[recording] format = "cast3"` for v3 automatic recordings and use `[trace]` to select retention:
+Set `[recording] format = "cast3"` for v3 automatic recordings. This example keeps a v3 cast and trace artifacts on failure:
 
 ```toml
 [recording]

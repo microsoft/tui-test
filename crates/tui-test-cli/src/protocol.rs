@@ -10,7 +10,24 @@ use tui_test::{
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
+
+// Config files intentionally exclude mode; the daemon transport must retain it.
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "AutomaticRecording", deny_unknown_fields)]
+struct AutomaticRecordingWire {
+    #[serde(default)]
+    mode: tui_test::AutomaticRecordingMode,
+    directory: Option<std::path::PathBuf>,
+    format: Option<RecordingFormat>,
+}
+
+fn deserialize_recording<'de, D>(deserializer: D) -> Result<Box<AutomaticRecording>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    AutomaticRecordingWire::deserialize(deserializer).map(Box::new)
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "tui_test::ScrollTarget")]
@@ -57,7 +74,11 @@ pub enum Request {
         restart: bool,
         #[serde(default)]
         timeouts: Timeouts,
-        #[serde(default)]
+        #[serde(
+            default,
+            serialize_with = "AutomaticRecordingWire::serialize",
+            deserialize_with = "deserialize_recording"
+        )]
         recording: Box<AutomaticRecording>,
         #[serde(default)]
         trace: tui_test::TraceOptions,
@@ -270,47 +291,34 @@ impl Request {
     }
 
     pub fn execute_cancellable(self, engine: &Engine, cancelled: &dyn Fn() -> bool) -> Response {
-        if let Request::WithContext {
-            request,
-            mut context,
-        } = self
-        {
-            if context.operation_name.is_none() {
-                context.operation_name = Some(request.diagnostic_operation_name().to_string());
-            }
-            let request_retention = request.diagnostic_retention();
-            if context.trace.is_none() {
-                if let Request::Open { trace, .. } = request.as_ref() {
-                    context.trace = Some(trace.clone());
-                }
-            }
-            if request_retention != DiagnosticRetentionOptions::default() {
-                context.retention = request_retention;
-            }
-            return match request.into_operation() {
-                Ok(operation) => Response::from_result(
-                    engine.execute_with_context_cancellable(operation, context, cancelled),
-                ),
-                Err(error) => Response::from_error(error),
-            };
-        }
-        let operation_name = self.diagnostic_operation_name().to_string();
-        let retention = self.diagnostic_retention();
-        let trace = match &self {
-            Self::Open { trace, .. } => Some(trace.clone()),
-            _ => None,
+        let (request, mut context) = match self {
+            Self::WithContext { request, context } => (*request, context),
+            request => (request, ExecutionContext::default()),
         };
-        match self.into_operation() {
-            Ok(operation) => Response::from_result(engine.execute_with_context_cancellable(
-                operation,
-                ExecutionContext {
-                    operation_name: Some(operation_name),
-                    retention,
-                    trace,
-                    ..ExecutionContext::default()
-                },
-                cancelled,
-            )),
+        context
+            .operation_name
+            .get_or_insert_with(|| request.diagnostic_operation_name().to_string());
+        if let Self::Open {
+            trace,
+            recording,
+            diagnostics,
+            ..
+        } = &request
+        {
+            // An explicit context trace (even Off) wins. Leave it unset for a cast-only spawn.
+            if trace.mode != tui_test::TraceMode::Off
+                || recording.mode == tui_test::AutomaticRecordingMode::Disabled
+            {
+                context.trace.get_or_insert_with(|| trace.clone());
+            }
+            if *diagnostics != DiagnosticRetentionOptions::default() {
+                context.retention = *diagnostics;
+            }
+        }
+        match request.into_operation() {
+            Ok(operation) => Response::from_result(
+                engine.execute_with_context_cancellable(operation, context, cancelled),
+            ),
             Err(error) => Response::from_error(error),
         }
     }
@@ -470,14 +478,6 @@ impl Request {
             Self::WithContext { request, .. } => request.is_shutdown(),
             Self::Shutdown => true,
             _ => false,
-        }
-    }
-
-    fn diagnostic_retention(&self) -> DiagnosticRetentionOptions {
-        match self {
-            Self::WithContext { request, .. } => request.diagnostic_retention(),
-            Self::Open { diagnostics, .. } => *diagnostics,
-            _ => DiagnosticRetentionOptions::default(),
         }
     }
 
@@ -890,6 +890,34 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
 mod tests {
     use super::*;
     use tui_test::FailureReason;
+
+    #[test]
+    fn automatic_recording_wire_preserves_modes_and_legacy_defaults() {
+        for mode in [None, Some("disabled"), Some("on-failure"), Some("always")] {
+            for program in [None, Some(vec!["example"])] {
+                let mut value = json!({
+                    "kind": "open", "program": program, "cols": 80, "rows": 24, "env": [],
+                    "recording": { "directory": "casts" },
+                });
+                if let Some(mode) = mode {
+                    value["recording"]["mode"] = json!(mode);
+                }
+                let request: Request = serde_json::from_value(value).unwrap();
+                let operation = request.into_operation().unwrap();
+                let recording = match operation {
+                    Operation::Open(options) => options.recording,
+                    Operation::Run(options) => options.recording,
+                    _ => panic!("expected spawn operation"),
+                };
+                assert_eq!(
+                    serde_json::to_value(recording.mode).unwrap(),
+                    mode.unwrap_or("disabled")
+                );
+                assert_eq!(recording.directory, Some("casts".into()));
+                assert_eq!(recording.format, None);
+            }
+        }
+    }
 
     #[test]
     fn session_parity_requests_round_trip_and_map_to_operations() {
@@ -1327,12 +1355,14 @@ mod tests {
             });
             let decoded: Request =
                 serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
-            assert_eq!(decoded.diagnostic_retention().screen_history_limit, limit);
             let Request::WithContext { context, request } = decoded else {
                 panic!("expected context wrapper");
             };
             assert_eq!(context.retention.screen_history_limit, limit);
-            assert!(request.is_open());
+            let Request::Open { diagnostics, .. } = *request else {
+                panic!("expected open request");
+            };
+            assert_eq!(diagnostics.screen_history_limit, limit);
         }
     }
 

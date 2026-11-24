@@ -54,7 +54,7 @@ impl From<ShellArg> for Shell {
     }
 }
 
-/// Which terminal profile a session runs with.
+/// Configuration used to start a session.
 #[derive(Args, Clone, Default)]
 pub struct ProfileArgs {
     /// Config file to read (default: ./tui-test.toml, then the platform config
@@ -64,6 +64,9 @@ pub struct ProfileArgs {
     /// Named profile from the config file (default: `default`).
     #[arg(long, value_name = "NAME")]
     pub profile: Option<String>,
+    /// Keep an automatic asciicast without enabling a trace. Active tracing takes precedence.
+    #[arg(long, value_enum)]
+    pub recording_mode: Option<AutomaticRecordingModeArg>,
 }
 
 impl ProfileArgs {
@@ -72,7 +75,15 @@ impl ProfileArgs {
     /// resolve a project-local config against.
     pub fn resolve(&self) -> anyhow::Result<tui_test::profile::Settings> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        tui_test::profile::resolve_settings(self.config.as_deref(), self.profile.as_deref(), &cwd)
+        let mut settings = tui_test::profile::resolve_settings(
+            self.config.as_deref(),
+            self.profile.as_deref(),
+            &cwd,
+        )?;
+        if let Some(mode) = self.recording_mode {
+            settings.recording.mode = mode.into();
+        }
+        Ok(settings)
     }
 }
 
@@ -96,6 +107,24 @@ impl From<RecordingFormatArg> for RecordingFormat {
             RecordingFormatArg::Mp4 => RecordingFormat::Mp4,
             RecordingFormatArg::Cast => RecordingFormat::Cast,
             RecordingFormatArg::Cast3 => RecordingFormat::Cast3,
+        }
+    }
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum AutomaticRecordingModeArg {
+    Disabled,
+    OnFailure,
+    Always,
+}
+
+impl From<AutomaticRecordingModeArg> for tui_test::AutomaticRecordingMode {
+    fn from(mode: AutomaticRecordingModeArg) -> Self {
+        match mode {
+            AutomaticRecordingModeArg::Disabled => Self::Disabled,
+            AutomaticRecordingModeArg::OnFailure => Self::OnFailure,
+            AutomaticRecordingModeArg::Always => Self::Always,
         }
     }
 }
