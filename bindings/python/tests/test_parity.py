@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -20,24 +21,14 @@ class ParityTests(unittest.TestCase):
                     content_padding=PaddingSides(left=0),
                     window=WindowStyle(title_bar=False),
                 )
+                original = copy.deepcopy(style)
                 terminal = TuiTest("parity", style=style)
                 style.font_size = 48
                 style.font.family = "serif"
                 style.font.files[0] = "changed.ttf"
                 style.content_padding.left = 10
                 style.window.title_bar = True
-                captured = []
-
-                def capture(name, arguments, kind):
-                    native_style = arguments[1]._obj.style
-                    captured.append((
-                        native_style.font_size.value,
-                        _native._text(native_style.font.family),
-                        _native._text(native_style.font.files[0]),
-                        native_style.content_padding.sides.left.value,
-                        native_style.window.title_bar.value,
-                    ))
-                    return {}
+                override = copy.deepcopy(style)
 
                 async def scenario():
                     args = ("example",) if method == "run" else ()
@@ -45,13 +36,11 @@ class ParityTests(unittest.TestCase):
                     await getattr(terminal, method)(*args, style=style)
                     await getattr(terminal, method)(*args)
 
-                with patch.object(_native, "_invoke", side_effect=capture):
+                with patch.object(terminal._native, method, new_callable=AsyncMock) as spawn:
                     asyncio.run(scenario())
-                original = (24, "monospace", "original.ttf", 0, False)
-                self.assertEqual(captured, [
-                    original, (48, "serif", "changed.ttf", 10, True), original,
-                ])
-                self.assertEqual(style.font.files, ["changed.ttf"])
+                self.assertEqual([call.args[-1] for call in spawn.await_args_list],
+                                 [original, override, original])
+                self.assertEqual(style, override)
 
     def test_scoped_text_and_whole_match_style_are_immutable(self):
         terminal = TuiTest("parity")

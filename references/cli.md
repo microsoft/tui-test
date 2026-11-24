@@ -22,8 +22,9 @@ Use `--session NAME` to select a session. `open` and `run` reuse it unless `--re
 
 Use `--recording-mode disabled|on-failure|always` with `open` or `run` to control
 automatic asciicast capture without enabling a trace. The default is `disabled`.
-`on-failure` keeps the cast only when an operation fails or `trace finish failed`
-reports a failed outcome; `always` also keeps successful sessions.
+`on-failure` keeps the cast after a failed assertion or an internal error. Use
+`trace finish failed` or `trace finish passed` before `close` to override that
+outcome. `always` also keeps successful sessions.
 `[recording].directory` still selects the destination. Active tracing takes
 precedence over this flag, as does an explicit trace setting in `--context-file`.
 

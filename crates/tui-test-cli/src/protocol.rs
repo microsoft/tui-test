@@ -290,58 +290,35 @@ impl Request {
     }
 
     pub fn execute_cancellable(self, engine: &Engine, cancelled: &dyn Fn() -> bool) -> Response {
-        if let Request::WithContext {
-            request,
-            mut context,
-        } = self
+        let (request, mut context) = match self {
+            Self::WithContext { request, context } => (*request, context),
+            request => (request, ExecutionContext::default()),
+        };
+        context
+            .operation_name
+            .get_or_insert_with(|| request.diagnostic_operation_name().to_string());
+        if let Self::Open {
+            trace,
+            recording,
+            diagnostics,
+            ..
+        } = &request
         {
-            if context.operation_name.is_none() {
-                context.operation_name = Some(request.diagnostic_operation_name().to_string());
-            }
-            let request_retention = request.diagnostic_retention();
-            if context.trace.is_none() {
-                context.trace = request.spawn_trace();
-            }
-            if request_retention != DiagnosticRetentionOptions::default() {
-                context.retention = request_retention;
-            }
-            return match request.into_operation() {
-                Ok(operation) => Response::from_result(
-                    engine.execute_with_context_cancellable(operation, context, cancelled),
-                ),
-                Err(error) => Response::from_error(error),
-            };
-        }
-        let operation_name = self.diagnostic_operation_name().to_string();
-        let retention = self.diagnostic_retention();
-        let trace = self.spawn_trace();
-        match self.into_operation() {
-            Ok(operation) => Response::from_result(engine.execute_with_context_cancellable(
-                operation,
-                ExecutionContext {
-                    operation_name: Some(operation_name),
-                    retention,
-                    trace,
-                    ..ExecutionContext::default()
-                },
-                cancelled,
-            )),
-            Err(error) => Response::from_error(error),
-        }
-    }
-
-    fn spawn_trace(&self) -> Option<tui_test::TraceOptions> {
-        // An explicit trace mode, even Off, overrides recording in the engine.
-        // Leave the context unset for a cast-only spawn.
-        match self {
-            Self::Open {
-                trace, recording, ..
-            } if trace.mode != tui_test::TraceMode::Off
-                || recording.mode == tui_test::AutomaticRecordingMode::Disabled =>
+            // An explicit context trace (even Off) wins. Leave it unset for a cast-only spawn.
+            if trace.mode != tui_test::TraceMode::Off
+                || recording.mode == tui_test::AutomaticRecordingMode::Disabled
             {
-                Some(trace.clone())
+                context.trace.get_or_insert_with(|| trace.clone());
             }
-            _ => None,
+            if *diagnostics != DiagnosticRetentionOptions::default() {
+                context.retention = *diagnostics;
+            }
+        }
+        match request.into_operation() {
+            Ok(operation) => Response::from_result(
+                engine.execute_with_context_cancellable(operation, context, cancelled),
+            ),
+            Err(error) => Response::from_error(error),
         }
     }
 
@@ -500,14 +477,6 @@ impl Request {
             Self::WithContext { request, .. } => request.is_shutdown(),
             Self::Shutdown => true,
             _ => false,
-        }
-    }
-
-    fn diagnostic_retention(&self) -> DiagnosticRetentionOptions {
-        match self {
-            Self::WithContext { request, .. } => request.diagnostic_retention(),
-            Self::Open { diagnostics, .. } => *diagnostics,
-            _ => DiagnosticRetentionOptions::default(),
         }
     }
 
@@ -1384,12 +1353,14 @@ mod tests {
             });
             let decoded: Request =
                 serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
-            assert_eq!(decoded.diagnostic_retention().screen_history_limit, limit);
             let Request::WithContext { context, request } = decoded else {
                 panic!("expected context wrapper");
             };
             assert_eq!(context.retention.screen_history_limit, limit);
-            assert!(request.is_open());
+            let Request::Open { diagnostics, .. } = *request else {
+                panic!("expected open request");
+            };
+            assert_eq!(diagnostics.screen_history_limit, limit);
         }
     }
 

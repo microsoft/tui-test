@@ -2307,10 +2307,17 @@ fn automatic_recording_modes_work_without_traces() {
                 assert!(PathBuf::from(path).starts_with(sandbox.home.join("casts")));
                 assert!(sandbox.ok(&["get-recording"]).contains("\"version\":2"));
             }
-            sandbox.ok(&["trace", "finish", if failed { "failed" } else { "passed" }]);
+            if failed {
+                let assertion = sandbox.run(&["expect", "text", "not on screen", "--timeout", "0"]);
+                assert_eq!(assertion.status.code(), Some(1));
+            }
             sandbox.ok(&["close"]);
-            if mode != "disabled" {
-                assert_eq!(PathBuf::from(path).is_file(), mode == "always" || failed);
+            let retained = mode == "always" || (mode == "on-failure" && failed);
+            assert_eq!(PathBuf::from(path).is_file(), retained);
+            if retained {
+                assert!(sandbox.ok(&["get-recording"]).contains("\"version\":2"));
+            } else {
+                assert_eq!(sandbox.run(&["get-recording"]).status.code(), Some(3));
             }
             assert!(!sandbox.home.join("traces").exists());
         }
