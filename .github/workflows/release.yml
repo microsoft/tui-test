@@ -116,7 +116,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         if: contains(matrix.target, 'musl')
         with:
           tool: cargo-zigbuild
@@ -209,7 +209,7 @@ jobs:
         if: matrix.target == 'aarch64-pc-windows-msvc'
         run: node .github/scripts/release/patch-zig-windows-arm64.mjs
 
-      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         if: matrix.zigbuild && !endsWith(matrix.target, '-gnu')
         with:
           tool: cargo-zigbuild
