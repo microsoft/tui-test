@@ -194,7 +194,7 @@ export interface Locator {
   expect(opts?: LocatorExpectOptions): Promise<void>;
 }
 
-export type RecordingFormat = "apng" | "gif" | "mp4" | "cast";
+export type RecordingFormat = "apng" | "gif" | "mp4" | "cast" | "cast3";
 
 export interface RecordingOptions {
   format?: RecordingFormat;

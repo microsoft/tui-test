@@ -155,6 +155,19 @@ pub struct SpawnOptions {
     pub env: Vec<(String, String)>,
 }
 
+pub(crate) fn term_for_env(env: &[(String, String)]) -> &str {
+    env.iter()
+        .rev()
+        .find(|(key, _)| {
+            if cfg!(windows) {
+                key.eq_ignore_ascii_case("TERM")
+            } else {
+                key == "TERM"
+            }
+        })
+        .map_or("xterm-256color", |(_, value)| value.as_str())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessExit {
     pub(crate) code: i32,
@@ -210,7 +223,7 @@ impl Pty {
         for (k, v) in std::env::vars() {
             cmd.env(k, v);
         }
-        cmd.env("TERM", "xterm-256color");
+        cmd.env("TERM", term_for_env(&opts.env));
         for (k, v) in &opts.env {
             cmd.env(k, v);
         }

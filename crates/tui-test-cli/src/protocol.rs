@@ -10,7 +10,7 @@ use tui_test::{
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 // Config files intentionally exclude mode; the daemon transport must retain it.
 #[derive(Serialize, Deserialize)]
@@ -19,6 +19,7 @@ struct AutomaticRecordingWire {
     #[serde(default)]
     mode: tui_test::AutomaticRecordingMode,
     directory: Option<std::path::PathBuf>,
+    format: Option<RecordingFormat>,
 }
 
 fn deserialize_recording<'de, D>(deserializer: D) -> Result<Box<AutomaticRecording>, D::Error>
@@ -913,6 +914,7 @@ mod tests {
                     mode.unwrap_or("disabled")
                 );
                 assert_eq!(recording.directory, Some("casts".into()));
+                assert_eq!(recording.format, None);
             }
         }
     }

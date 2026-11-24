@@ -103,6 +103,7 @@ pub struct Session {
     pub cancelled: Arc<AtomicBool>,
     pub(crate) bells: BellTracker,
     recorder: Recorder,
+    recording_env: Vec<(String, String)>,
     #[cfg(feature = "recording-raster")]
     recording_sampler: Mutex<Option<RecordingSampler>>,
     logger: Arc<Logger>,
@@ -200,6 +201,7 @@ impl Session {
         logger: Arc<Logger>,
         recording_path: Option<PathBuf>,
         recording_required: bool,
+        recording_format: crate::api::RecordingFormat,
     ) -> anyhow::Result<Self> {
         style.validate().map_err(anyhow::Error::msg)?;
         validate_size(cols, rows)?;
@@ -236,7 +238,10 @@ impl Session {
         let _ = try_capture_visual_state(&mut initial_state, true);
         let state = Arc::new(Mutex::new(initial_state));
 
-        let mut rec_env = vec![("TERM".to_string(), "xterm-256color".to_string())];
+        let mut rec_env = vec![(
+            "TERM".to_string(),
+            crate::terminal::pty::term_for_env(&env).to_string(),
+        )];
         if let Some(sh) = shell {
             rec_env.push(("SHELL".to_string(), sh.as_str().to_string()));
         }
@@ -248,6 +253,7 @@ impl Session {
             recording_required,
             logger.clone(),
             started_at,
+            recording_format,
         )?;
         let spawned = (|| {
             if let Some(program) = &program {
@@ -393,6 +399,7 @@ impl Session {
             cancelled,
             bells,
             recorder,
+            recording_env: rec_env,
             #[cfg(feature = "recording-raster")]
             recording_sampler: Mutex::new(None),
             logger,
@@ -474,12 +481,12 @@ impl Session {
                 )
             })?;
         let zoom = crate::api::resolve_zoom(zoom)?;
-        if format == crate::api::RecordingFormat::Cast && zoom != 1.0 {
+        if format.is_cast() && zoom != 1.0 {
             return Err(crate::api::TuiTestError::usage(
                 "zoom is only supported for image and video recordings",
             ));
         }
-        if format == crate::api::RecordingFormat::Cast && background.is_some() {
+        if format.is_cast() && background.is_some() {
             return Err(crate::api::TuiTestError::usage(
                 "background customization is only supported for image and video recordings",
             ));
@@ -492,7 +499,7 @@ impl Session {
             ));
         }
         #[cfg(not(feature = "recording-raster"))]
-        if format != crate::api::RecordingFormat::Cast {
+        if !format.is_cast() {
             return Err(crate::api::TuiTestError::usage(
                 "APNG, GIF, and MP4 recording require the tui-test 'recording-raster' feature",
             ));
@@ -529,15 +536,11 @@ impl Session {
         .map_err(|_| crate::api::TuiTestError::usage("recording speed is too small"))?;
 
         let target_path = PathBuf::from(path);
-        let capture_path = if format == crate::api::RecordingFormat::Cast {
+        let capture_path = if format.is_cast() {
             target_path.clone()
         } else {
             record::sidecar_path(&target_path)
         };
-        let mut env = vec![("TERM".to_string(), "xterm-256color".to_string())];
-        if let Some(shell) = self.shell {
-            env.push(("SHELL".to_string(), shell.as_str().to_string()));
-        }
         #[cfg(feature = "recording-raster")]
         let mut sampler = self
             .recording_sampler
@@ -558,7 +561,7 @@ impl Session {
             format,
             cols,
             rows,
-            env,
+            env: self.recording_env.clone(),
             initial_output,
             #[cfg(feature = "recording-raster")]
             zoom,
@@ -578,7 +581,7 @@ impl Session {
         };
         let started = Instant::now();
         #[cfg(feature = "recording-raster")]
-        let frames = if format == crate::api::RecordingFormat::Cast {
+        let frames = if format.is_cast() {
             None
         } else {
             Some(
@@ -709,7 +712,7 @@ impl Session {
             drop(sampler);
         }
         let stopped = stopped.map_err(capture_error)?;
-        if stopped.format == crate::api::RecordingFormat::Cast {
+        if stopped.format.is_cast() {
             return Ok(stopped.target_path.to_string_lossy().into_owned());
         }
 
@@ -1121,6 +1124,7 @@ mod tests {
             Arc::new(Logger::disabled()),
             None,
             false,
+            crate::api::RecordingFormat::Cast,
         )
         .unwrap()
     }
