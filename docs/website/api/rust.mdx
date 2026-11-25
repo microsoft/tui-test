@@ -12,11 +12,11 @@ editUrl: false
 cargo add tui-test-rs@0.1.1
 ```
 
-Requires Rust 1.90 or newer. Alacritty is enabled by default without extra feature flags; opt into additional backends or raster capture features as needed:
+Requires Rust 1.96 or newer. Alacritty is enabled by default without extra feature flags; opt into additional backends or raster capture features as needed:
 
 | Feature | Enables |
 | --- | --- |
-| `ghostty` | Native Ghostty backend (requires Zig 0.16 at build time). |
+| `ghostty` | Native Ghostty backend (requires Zig 0.15.2 at build time). |
 | `rio` | Rio terminal backend. |
 | `xtermjs` | Embedded headless xterm.js backend with Unicode 11 width tables. |
 | `recording-raster` | PNG screenshots and APNG, GIF, and MP4 recordings (uses system fonts unless bundled fonts are enabled; MP4 also needs `ffmpeg` on `PATH`). |

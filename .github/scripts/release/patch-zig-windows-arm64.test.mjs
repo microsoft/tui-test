@@ -38,3 +38,17 @@ test("patchWindowsSelfInfo is idempotent and enforces 0.16.0 expectations", t =>
   assert.throws(() => patchWindowsSelfInfo(filename, "0.16.0"), /Expected one unpatched/);
   assert.equal(patchWindowsSelfInfo(filename, "0.16.1"), "not-needed");
 });
+
+test("patchWindowsSelfInfo skips other Zig versions before opening the file", t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zig-patch-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const filename = path.join(dir, "Windows.zig");
+
+  assert.equal(patchWindowsSelfInfo(filename, "0.15.2"), "not-needed");
+  assert.equal(patchWindowsSelfInfo(filename, "0.16.1"), "not-needed");
+  assert.throws(() => patchWindowsSelfInfo(filename, "0.16.0"), { code: "ENOENT" });
+
+  fs.writeFileSync(filename, UNPATCHED);
+  assert.equal(patchWindowsSelfInfo(filename, "0.15.2"), "not-needed");
+  assert.equal(fs.readFileSync(filename, "utf8"), UNPATCHED);
+});

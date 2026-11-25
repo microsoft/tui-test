@@ -87,6 +87,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ghostty_version_is_text_in_json_and_plain_output() {
+        let report: Value = serde_json::from_str(&render(true).unwrap()).unwrap();
+        let version = report["terminal_emulators"]["ghostty"]["version"]
+            .as_str()
+            .unwrap();
+        assert!(!version.is_empty());
+        assert!(render(false)
+            .unwrap()
+            .contains(&format!("ghostty: {version} (")));
+    }
+
+    #[test]
     fn resolved_portable_pty_version_has_a_conpty_mapping() {
         assert!(
             conpty_mapping(PORTABLE_PTY_VERSION).is_some(),

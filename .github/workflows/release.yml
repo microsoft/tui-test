@@ -104,7 +104,7 @@ jobs:
 
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: "0.16.0"
+          version: "0.15.2"
           cache-key: ${{ matrix.target }}
 
       - name: Patch Zig 0.16 stdlib alignment for Windows ARM64
@@ -202,7 +202,7 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         if: "!endsWith(matrix.target, '-gnu')"
         with:
-          version: "0.16.0"
+          version: "0.15.2"
           cache-key: ${{ matrix.target }}
 
       - name: Patch Zig 0.16 stdlib alignment for Windows ARM64
@@ -423,7 +423,7 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         if: runner.os != 'Linux'
         with:
-          version: "0.16.0"
+          version: "0.15.2"
           cache-key: ${{ matrix.target }}
 
       - name: Patch Zig 0.16 stdlib alignment for Windows ARM64

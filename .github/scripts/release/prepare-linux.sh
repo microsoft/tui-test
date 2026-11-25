@@ -5,15 +5,15 @@ set -euo pipefail
 curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs |
   sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path
 
-version=0.16.0
+version=0.15.2
 case "$(uname -m)" in
   x86_64|amd64)
     arch=x86_64
-    sha256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+    sha256=02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239
     ;;
   aarch64|arm64)
     arch=aarch64
-    sha256=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+    sha256=958ed7d1e00d0ea76590d27666efbf7a932281b3d7ba0c6b01b0ff26498f667f
     ;;
   *)
     echo "unsupported Zig host architecture: $(uname -m)" >&2
