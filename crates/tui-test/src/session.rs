@@ -301,50 +301,15 @@ impl Session {
         let reader_recorder = recorder.capture();
         let reader_finished = Arc::new(AtomicBool::new(false));
         let finished = reader_finished.clone();
-        let mut reader = reader;
         let reader_handle = std::thread::spawn(move || {
-            use std::io::Read;
-            let mut buf = [0u8; 8192];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => {
-                        reader_logger.event("pty stream reached EOF");
-                        break;
-                    }
-                    Err(error) => {
-                        reader_logger.event(&format!("pty read failed error={error}"));
-                        break;
-                    }
-                    Ok(n) => {
-                        reader_logger.read(&buf[..n]);
-                        {
-                            let mut st = reader_state
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            st.emu.process(&buf[..n]);
-                            st.tracker.feed(&buf[..n]);
-                            st.visual_revision = st.visual_revision.wrapping_add(1);
-                            st.screen_dirty = true;
-                            st.mouse_mode.process(&buf[..n]);
-                            st.highlight = None;
-                            reader_recorder.on_data(&buf[..n]);
-                            let _ = try_capture_visual_state(&mut st, false);
-                        }
-                        if let Err(error) = flush_replies(
-                            &reader_state,
-                            &reader_pty,
-                            &reader_logger,
-                            &reader_reply_delivery,
-                        ) {
-                            reader_state
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .diagnostic_error = Some(error.message);
-                            break;
-                        }
-                    }
-                }
-            }
+            read_pty_output(
+                reader,
+                &reader_state,
+                &reader_pty,
+                &reader_logger,
+                &reader_recorder,
+                &reader_reply_delivery,
+            );
             finished.store(true, Ordering::Release);
         });
 
@@ -867,11 +832,71 @@ impl Session {
     }
 }
 
+fn read_pty_output(
+    mut reader: impl std::io::Read,
+    state: &Mutex<TermState>,
+    pty: &Pty,
+    logger: &Logger,
+    recorder: &record::Capture,
+    reply_delivery: &Mutex<()>,
+) {
+    let mut buf = [0u8; 8192];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => {
+                logger.event("pty stream reached EOF");
+                break;
+            }
+            Err(error) => {
+                logger.event(&format!("pty read failed error={error}"));
+                break;
+            }
+            Ok(n) => {
+                logger.read(&buf[..n]);
+                {
+                    let mut st = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    st.emu.process(&buf[..n]);
+                    st.tracker.feed(&buf[..n]);
+                    st.visual_revision = st.visual_revision.wrapping_add(1);
+                    st.screen_dirty = true;
+                    st.mouse_mode.process(&buf[..n]);
+                    st.highlight = None;
+                    recorder.on_data(&buf[..n]);
+                    let _ = try_capture_visual_state(&mut st, false);
+                }
+                if let Err(error) = flush_replies(state, pty, logger, reply_delivery) {
+                    state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .diagnostic_error = Some(error.message);
+                }
+            }
+        }
+    }
+}
+
 fn flush_replies(
     state: &Mutex<TermState>,
     pty: &Pty,
     logger: &Logger,
     reply_delivery: &Mutex<()>,
+) -> Result<(), crate::api::TuiTestError> {
+    deliver_replies(state, reply_delivery, |pending| {
+        logger.reply(pending);
+        pty.write(pending).map_err(|error| {
+            let message = format!("failed to write terminal reply: {error}");
+            logger.event(&message);
+            crate::api::TuiTestError::internal(message)
+        })
+    })
+}
+
+fn deliver_replies(
+    state: &Mutex<TermState>,
+    reply_delivery: &Mutex<()>,
+    write: impl FnOnce(&[u8]) -> Result<(), crate::api::TuiTestError>,
 ) -> Result<(), crate::api::TuiTestError> {
     // Serialize the drain and write together, but release terminal state before I/O.
     let _delivery = reply_delivery
@@ -885,12 +910,7 @@ fn flush_replies(
     if pending.is_empty() {
         return Ok(());
     }
-    logger.reply(&pending);
-    pty.write(&pending).map_err(|error| {
-        let message = format!("failed to write terminal reply: {error}");
-        logger.event(&message);
-        crate::api::TuiTestError::internal(message)
-    })
+    write(&pending)
 }
 
 fn resize_emulator_and_record(state: &mut TermState, recorder: &Recorder, cols: u16, rows: u16) {
@@ -1123,7 +1143,7 @@ fn replace_output(source: &std::path::Path, target: &std::path::Path) -> std::io
 mod tests {
     use super::*;
     use crate::terminal::alacritty::AlacrittyEmu;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc;
     use std::time::Duration;
@@ -1156,6 +1176,52 @@ mod tests {
         )
     }
 
+    #[test]
+    fn reply_failure_does_not_discard_final_output_or_recording() {
+        let session = reply_session();
+        session.kill();
+        let mut session = Arc::try_unwrap(session).ok().unwrap();
+        session.reader.take().unwrap().join().unwrap();
+        let path = test_path("reply-error-tail");
+        let mut recorder = Recorder::create(
+            Some(path.clone()),
+            80,
+            24,
+            &[],
+            true,
+            Arc::new(Logger::disabled()),
+        )
+        .unwrap();
+        let output = b"\x1b[6nfirst-output\r\n"
+            .as_slice()
+            .chain(b"final-output\r\n\x1b]133;D;7\x1b\\".as_slice());
+        read_pty_output(
+            output,
+            &session.state,
+            &session.pty,
+            &session.logger,
+            &recorder.capture(),
+            &session.reply_delivery,
+        );
+        recorder.shutdown();
+        let cast = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let state = session.state.lock().unwrap();
+        let rows = state.emu.viewable_rows();
+        let text: String = rows.iter().flatten().map(|cell| cell.ch.as_str()).collect();
+        assert!(text.contains("final-output"), "{text}");
+        assert!(
+            cast.contains("first-output") && cast.contains("final-output"),
+            "{cast}"
+        );
+        assert_eq!(state.tracker.last_exit(), Some(7));
+        assert!(state
+            .diagnostic_error
+            .as_ref()
+            .unwrap()
+            .contains("failed to write terminal reply"));
+    }
+
     struct PausedReplyWriter {
         entered: mpsc::Sender<Vec<u8>>,
         release: mpsc::Receiver<()>,
@@ -1177,12 +1243,9 @@ mod tests {
     #[test]
     fn resize_reply_delivery_preserves_order_without_holding_terminal_state() {
         let session = reply_session();
-        let (entered_tx, entered_rx) = mpsc::channel();
+        let (drained_tx, drained_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        session.pty.replace_test_writer(Box::new(PausedReplyWriter {
-            entered: entered_tx,
-            release: release_rx,
-        }));
+        let (written_tx, written_rx) = mpsc::channel();
         session
             .state
             .lock()
@@ -1190,16 +1253,18 @@ mod tests {
             .emu
             .process(b"\x1b[2;3H\x1b[6n");
         let first = session.clone();
+        let first_written = written_tx.clone();
         let first = std::thread::spawn(move || {
-            flush_replies(
-                &first.state,
-                &first.pty,
-                &first.logger,
-                &first.reply_delivery,
-            )
+            deliver_replies(&first.state, &first.reply_delivery, |pending| {
+                drained_tx.send(pending.to_vec()).unwrap();
+                // Pause after the drain, before any writer lock or write.
+                release_rx.recv().unwrap();
+                first_written.send(pending.to_vec()).unwrap();
+                Ok(())
+            })
         });
         assert_eq!(
-            entered_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            drained_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
             b"\x1b[2;3R"
         );
         {
@@ -1210,25 +1275,25 @@ mod tests {
             state.emu.process(b"\x1b[4;5H\x1b[6n");
         }
         let second = session.clone();
-        let second = std::thread::spawn(move || second.resize(90, 25));
-        release_tx.send(()).unwrap();
-        assert_eq!(
-            entered_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-            b"R"
-        );
-        release_tx.send(()).unwrap();
-        assert_eq!(
-            entered_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-            b"\x1b[4;5R"
-        );
-        release_tx.send(()).unwrap();
-        assert_eq!(
-            entered_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-            b"R"
-        );
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let second = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = deliver_replies(&second.state, &second.reply_delivery, |pending| {
+                written_tx.send(pending.to_vec()).unwrap();
+                Ok(())
+            });
+            finished_tx.send(()).unwrap();
+            result
+        });
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let overtook = finished_rx.recv_timeout(Duration::from_millis(100));
         release_tx.send(()).unwrap();
         first.join().unwrap().unwrap();
         second.join().unwrap().unwrap();
+        assert!(matches!(overtook, Err(mpsc::RecvTimeoutError::Timeout)));
+        assert_eq!(written_rx.recv().unwrap(), b"\x1b[2;3R");
+        assert_eq!(written_rx.recv().unwrap(), b"\x1b[4;5R");
     }
 
     #[test]
