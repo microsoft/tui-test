@@ -51,6 +51,77 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
     }
 }
 
+#[cfg(all(unix, feature = "ghostty"))]
+#[test]
+fn native_resize_reply_child() {
+    use std::io::{Read, Write};
+
+    if std::env::var_os("TUI_TEST_RESIZE_REPLY_CHILD").is_none() {
+        return;
+    }
+    assert!(std::process::Command::new("stty")
+        .args(["raw", "-echo"])
+        .status()
+        .unwrap()
+        .success());
+    let mut input = std::io::stdin().lock();
+    let mut output = std::io::stdout().lock();
+    output.write_all(b"\x1b[?2048h\x1b[?2048$p").unwrap();
+    output.flush().unwrap();
+    let mut enabled = [0; 11];
+    input.read_exact(&mut enabled).unwrap();
+    assert_eq!(&enabled, b"\x1b[?2048;1$y");
+    output.write_all(b"resize-reply-ready\r\n").unwrap();
+    output.flush().unwrap();
+
+    // Stay silent until the native resize report arrives.
+    let mut report = Vec::new();
+    for byte in input.bytes().take(128) {
+        let byte = byte.unwrap();
+        report.push(byte);
+        if byte == b't' {
+            break;
+        }
+    }
+    let report = String::from_utf8(report).unwrap();
+    assert!(report.starts_with("\x1b[48;30;100;"), "{report:?}");
+    assert!(report.ends_with('t'), "{report:?}");
+    output.write_all(b"resize-reply-received\r\n").unwrap();
+    output.flush().unwrap();
+}
+
+#[cfg(all(unix, feature = "ghostty"))]
+#[test]
+fn native_resize_reply_reaches_a_silent_child() {
+    let session = Session::new(format!("resize-reply-{}", std::process::id()));
+    let executable = std::env::current_exe().unwrap();
+    let mut options = run_options(
+        executable.to_str().unwrap(),
+        &["--exact", "native_resize_reply_child", "--nocapture"],
+    );
+    options.backend = tui_test::Backend::Ghostty;
+    options
+        .env
+        .push(("TUI_TEST_RESIZE_REPLY_CHILD".into(), "1".into()));
+    options.recording.mode = AutomaticRecordingMode::Disabled;
+    session.run(options).unwrap();
+    session
+        .get_by_text("resize-reply-ready")
+        .wait_with_timeout(Some(5_000))
+        .unwrap();
+    session
+        .execute(Operation::Resize {
+            cols: 100,
+            rows: 30,
+        })
+        .unwrap();
+    session
+        .get_by_text("resize-reply-received")
+        .wait_with_timeout(Some(2_000))
+        .unwrap();
+    session.close().unwrap();
+}
+
 #[test]
 fn trace_retention_writes_complete_bundles_only_for_selected_outcomes() {
     use tui_test::{TraceMode, TraceOptions};
