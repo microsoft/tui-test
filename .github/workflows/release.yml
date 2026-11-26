@@ -116,7 +116,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         if: contains(matrix.target, 'musl')
         with:
           tool: cargo-zigbuild
@@ -209,7 +209,7 @@ jobs:
         if: matrix.target == 'aarch64-pc-windows-msvc'
         run: node .github/scripts/release/patch-zig-windows-arm64.mjs
 
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         if: matrix.zigbuild && !endsWith(matrix.target, '-gnu')
         with:
           tool: cargo-zigbuild
@@ -327,7 +327,7 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: bindings/go/go.mod
           cache-dependency-path: bindings/go/go.sum
