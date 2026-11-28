@@ -54,7 +54,7 @@ jobs:
           cache: npm
           cache-dependency-path: bindings/js/package-lock.json
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: bindings/go/go.mod
           cache-dependency-path: bindings/go/go.sum
@@ -127,7 +127,7 @@ jobs:
           CGO_ENABLED=0 go test ./...
           CGO_ENABLED=1 go test -race ./...
 
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         if: runner.os == 'Linux'
         with:
           tool: cargo-zigbuild
