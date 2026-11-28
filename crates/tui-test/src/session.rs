@@ -100,6 +100,7 @@ pub struct Session {
     pub state: Arc<Mutex<TermState>>,
     /// Serialize viewport movement with input without blocking the output reader.
     pub(crate) viewport_input: Arc<Mutex<()>>,
+    reply_delivery: Arc<Mutex<()>>,
     pub cancelled: Arc<AtomicBool>,
     pub(crate) bells: BellTracker,
     recorder: Recorder,
@@ -291,50 +292,24 @@ impl Session {
         let child_pid = pty.pid();
         let pty = Arc::new(pty);
         let cancelled = Arc::new(AtomicBool::new(false));
+        let reply_delivery = Arc::new(Mutex::new(()));
 
         let reader_state = state.clone();
         let reader_pty = pty.clone();
+        let reader_reply_delivery = reply_delivery.clone();
         let reader_logger = logger.clone();
         let reader_recorder = recorder.capture();
         let reader_finished = Arc::new(AtomicBool::new(false));
         let finished = reader_finished.clone();
-        let mut reader = reader;
         let reader_handle = std::thread::spawn(move || {
-            use std::io::Read;
-            let mut buf = [0u8; 8192];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => {
-                        reader_logger.event("pty stream reached EOF");
-                        break;
-                    }
-                    Err(error) => {
-                        reader_logger.event(&format!("pty read failed error={error}"));
-                        break;
-                    }
-                    Ok(n) => {
-                        reader_logger.read(&buf[..n]);
-                        let pending = {
-                            let mut st = reader_state
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            st.emu.process(&buf[..n]);
-                            st.tracker.feed(&buf[..n]);
-                            st.visual_revision = st.visual_revision.wrapping_add(1);
-                            st.screen_dirty = true;
-                            st.mouse_mode.process(&buf[..n]);
-                            st.highlight = None;
-                            reader_recorder.on_data(&buf[..n]);
-                            let _ = try_capture_visual_state(&mut st, false);
-                            st.emu.take_pending_writes()
-                        };
-                        if !pending.is_empty() {
-                            reader_logger.reply(&pending);
-                            let _ = reader_pty.write(&pending);
-                        }
-                    }
-                }
-            }
+            read_pty_output(
+                reader,
+                &reader_state,
+                &reader_pty,
+                &reader_logger,
+                &reader_recorder,
+                &reader_reply_delivery,
+            );
             finished.store(true, Ordering::Release);
         });
 
@@ -396,6 +371,7 @@ impl Session {
             pty,
             state,
             viewport_input: Arc::new(Mutex::new(())),
+            reply_delivery,
             cancelled,
             bells,
             recorder,
@@ -440,7 +416,8 @@ impl Session {
             crate::api::TuiTestError::internal(format!("failed to resize PTY: {error}"))
         })?;
         resize_emulator_and_record(&mut state, &self.recorder, cols, rows);
-        Ok(())
+        drop(state);
+        flush_replies(&self.state, &self.pty, &self.logger, &self.reply_delivery)
     }
 
     pub fn scroll(&self, target: crate::api::ScrollTarget) -> Result<(), crate::api::TuiTestError> {
@@ -855,6 +832,87 @@ impl Session {
     }
 }
 
+fn read_pty_output(
+    mut reader: impl std::io::Read,
+    state: &Mutex<TermState>,
+    pty: &Pty,
+    logger: &Logger,
+    recorder: &record::Capture,
+    reply_delivery: &Mutex<()>,
+) {
+    let mut buf = [0u8; 8192];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => {
+                logger.event("pty stream reached EOF");
+                break;
+            }
+            Err(error) => {
+                logger.event(&format!("pty read failed error={error}"));
+                break;
+            }
+            Ok(n) => {
+                logger.read(&buf[..n]);
+                {
+                    let mut st = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    st.emu.process(&buf[..n]);
+                    st.tracker.feed(&buf[..n]);
+                    st.visual_revision = st.visual_revision.wrapping_add(1);
+                    st.screen_dirty = true;
+                    st.mouse_mode.process(&buf[..n]);
+                    st.highlight = None;
+                    recorder.on_data(&buf[..n]);
+                    let _ = try_capture_visual_state(&mut st, false);
+                }
+                if let Err(error) = flush_replies(state, pty, logger, reply_delivery) {
+                    state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .diagnostic_error = Some(error.message);
+                }
+            }
+        }
+    }
+}
+
+fn flush_replies(
+    state: &Mutex<TermState>,
+    pty: &Pty,
+    logger: &Logger,
+    reply_delivery: &Mutex<()>,
+) -> Result<(), crate::api::TuiTestError> {
+    deliver_replies(state, reply_delivery, |pending| {
+        logger.reply(pending);
+        pty.write(pending).map_err(|error| {
+            let message = format!("failed to write terminal reply: {error}");
+            logger.event(&message);
+            crate::api::TuiTestError::internal(message)
+        })
+    })
+}
+
+fn deliver_replies(
+    state: &Mutex<TermState>,
+    reply_delivery: &Mutex<()>,
+    write: impl FnOnce(&[u8]) -> Result<(), crate::api::TuiTestError>,
+) -> Result<(), crate::api::TuiTestError> {
+    // Serialize the drain and write together, but release terminal state before I/O.
+    let _delivery = reply_delivery
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let pending = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .emu
+        .take_pending_writes();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    write(&pending)
+}
+
 fn resize_emulator_and_record(state: &mut TermState, recorder: &Recorder, cols: u16, rows: u16) {
     recorder.on_resize(cols, rows);
     state.emu.resize(cols, rows);
@@ -1085,8 +1143,203 @@ fn replace_output(source: &std::path::Path, target: &std::path::Path) -> std::io
 mod tests {
     use super::*;
     use crate::terminal::alacritty::AlacrittyEmu;
+    use std::io::{Read, Write};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc;
     use std::time::Duration;
+
+    fn reply_session() -> Arc<Session> {
+        let program = if cfg!(windows) {
+            vec!["cmd.exe".into(), "/c".into(), "pause >nul".into()]
+        } else {
+            vec!["sh".into(), "-c".into(), "read -r _".into()]
+        };
+        Arc::new(
+            Session::open(
+                None,
+                Some(program),
+                Backend::Alacritty,
+                Profile::default(),
+                crate::render::style::Style::default(),
+                80,
+                24,
+                None,
+                vec![],
+                crate::api::Timeouts::default(),
+                DiagnosticRetentionOptions::default(),
+                Arc::new(Logger::disabled()),
+                None,
+                false,
+                crate::api::RecordingFormat::Cast,
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn reply_failure_does_not_discard_final_output_or_recording() {
+        let session = reply_session();
+        session.kill();
+        let mut session = Arc::try_unwrap(session).ok().unwrap();
+        session.reader.take().unwrap().join().unwrap();
+        let path = test_path("reply-error-tail");
+        let mut recorder = Recorder::create(
+            Some(path.clone()),
+            80,
+            24,
+            &[],
+            true,
+            Arc::new(Logger::disabled()),
+        )
+        .unwrap();
+        let output = b"\x1b[6nfirst-output\r\n"
+            .as_slice()
+            .chain(b"final-output\r\n\x1b]133;D;7\x1b\\".as_slice());
+        read_pty_output(
+            output,
+            &session.state,
+            &session.pty,
+            &session.logger,
+            &recorder.capture(),
+            &session.reply_delivery,
+        );
+        recorder.shutdown();
+        let cast = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let state = session.state.lock().unwrap();
+        let rows = state.emu.viewable_rows();
+        let text: String = rows.iter().flatten().map(|cell| cell.ch.as_str()).collect();
+        assert!(text.contains("final-output"), "{text}");
+        assert!(
+            cast.contains("first-output") && cast.contains("final-output"),
+            "{cast}"
+        );
+        assert_eq!(state.tracker.last_exit(), Some(7));
+        assert!(state
+            .diagnostic_error
+            .as_ref()
+            .unwrap()
+            .contains("failed to write terminal reply"));
+    }
+
+    struct PausedReplyWriter {
+        entered: mpsc::Sender<Vec<u8>>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl Write for PausedReplyWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.entered.send(bytes.to_vec()).unwrap();
+            self.release.recv().unwrap();
+            // Leave a byte pending so Pty::write observes cancellation after release.
+            Ok(bytes.len().saturating_sub(1).max(1))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn resize_reply_delivery_preserves_order_without_holding_terminal_state() {
+        let session = reply_session();
+        let (drained_tx, drained_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (written_tx, written_rx) = mpsc::channel();
+        session
+            .state
+            .lock()
+            .unwrap()
+            .emu
+            .process(b"\x1b[2;3H\x1b[6n");
+        let first = session.clone();
+        let first_written = written_tx.clone();
+        let first = std::thread::spawn(move || {
+            deliver_replies(&first.state, &first.reply_delivery, |pending| {
+                drained_tx.send(pending.to_vec()).unwrap();
+                // Pause after the drain, before any writer lock or write.
+                release_rx.recv().unwrap();
+                first_written.send(pending.to_vec()).unwrap();
+                Ok(())
+            })
+        });
+        assert_eq!(
+            drained_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            b"\x1b[2;3R"
+        );
+        {
+            let mut state = session
+                .state
+                .try_lock()
+                .expect("reply write held terminal state");
+            state.emu.process(b"\x1b[4;5H\x1b[6n");
+        }
+        let second = session.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let second = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = deliver_replies(&second.state, &second.reply_delivery, |pending| {
+                written_tx.send(pending.to_vec()).unwrap();
+                Ok(())
+            });
+            finished_tx.send(()).unwrap();
+            result
+        });
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let overtook = finished_rx.recv_timeout(Duration::from_millis(100));
+        release_tx.send(()).unwrap();
+        first.join().unwrap().unwrap();
+        second.join().unwrap().unwrap();
+        assert!(matches!(overtook, Err(mpsc::RecvTimeoutError::Timeout)));
+        assert_eq!(written_rx.recv().unwrap(), b"\x1b[2;3R");
+        assert_eq!(written_rx.recv().unwrap(), b"\x1b[4;5R");
+    }
+
+    #[test]
+    fn resize_reply_delivery_does_not_block_close_from_killing_the_child() {
+        let session = reply_session();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        session.pty.replace_test_writer(Box::new(PausedReplyWriter {
+            entered: entered_tx,
+            release: release_rx,
+        }));
+        session.state.lock().unwrap().emu.process(b"\x1b[6n");
+        let resizing = session.clone();
+        let resizing = std::thread::spawn(move || resizing.resize(90, 25));
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let closing = session.clone();
+        let closing = std::thread::spawn(move || closing.kill());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while session.pty.try_wait().unwrap().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let exited = session.pty.try_wait().unwrap().is_some();
+        release_tx.send(()).unwrap();
+        closing.join().unwrap();
+        let result = resizing.join().unwrap();
+        let mut session = Arc::try_unwrap(session).ok().unwrap();
+        session.reader.take().unwrap().join().unwrap();
+        assert!(
+            exited,
+            "close waited for the reply writer before killing the child"
+        );
+        let message = match result {
+            Err(error) => {
+                assert_eq!(error.kind, crate::api::ErrorKind::Internal);
+                error.message
+            }
+            Ok(()) => session
+                .state
+                .lock()
+                .unwrap()
+                .diagnostic_error
+                .clone()
+                .unwrap(),
+        };
+        assert!(message.contains("failed to write terminal reply"));
+    }
 
     #[cfg(feature = "recording-raster")]
     #[test]
